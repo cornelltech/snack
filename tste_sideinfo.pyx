@@ -145,6 +145,7 @@ def tste(triplets,
          static_points=np.array([]),
          num_threads=None,
          use_log=False,
+         each_function=False,
 ):
     """Learn the triplet embedding for the given triplets.
 
@@ -168,6 +169,7 @@ def tste(triplets,
               a list so you can watch it converge.
     initial_X: The initial set of points to use. Normally distributed if unset.
     num_threads: Parallelism.
+    each_function: A function that is called for each gradient update
 
     """
     if num_threads is None:
@@ -194,6 +196,8 @@ def tste(triplets,
     saved_iterations = []
     def work(x):
         saved_iterations.append(x.copy().reshape(N, no_dims))
+        if each_function:
+            each_function(x.copy().reshape(N,no_dims))
         C,dC = tste_grad(x.reshape(N, no_dims), N, no_dims, triplets, alpha)
 
         X=x.reshape(N, no_dims)
@@ -210,7 +214,7 @@ def tste(triplets,
         it=0,
         n_iter=max_iter,
         n_iter_without_progress=5,
-        momentum=0.0,
+        momentum=0.5,
         learning_rate = (float(2.0) / n_triplets * N),
         min_gain = 1e-5,
         min_grad_norm = 1e-7, # Abort when less
