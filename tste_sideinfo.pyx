@@ -18,6 +18,10 @@ from libc.math cimport log
 cimport cython.parallel
 cimport openmp
 
+from scipy import linalg
+
+from sklearn.manifold.t_sne import _gradient_descent, _kl_divergence, _joint_probabilities
+
 cpdef tste_grad(npX,
                 int N,
                 int no_dims,
@@ -51,15 +55,14 @@ cpdef tste_grad(npX,
     cdef double P = 0
     cdef double C = 0
     cdef double A_to_B, A_to_C, const
-
-    # We don't perform regularization in this function.
-
     cdef double[::1] sum_X = np.zeros((N,), dtype='float64')
     cdef double[:, ::1] K = np.zeros((N, N), dtype='float64')
     cdef double[:, ::1] Q = np.zeros((N, N), dtype='float64')
     npdC = np.zeros((N, no_dims), 'float64')
     cdef double[:, ::1] dC = npdC
     cdef double[:, :, ::1] dC_part = np.zeros((no_triplets, no_dims, 3), 'float64')
+
+    # We don't perform L2 regularization, unlike original tSTE
 
     # Compute student-T kernel for each point
     # i,j range over points; k ranges over dims
@@ -84,7 +87,9 @@ cpdef tste_grad(npX,
                 # (Note however that we're flipping the long and short
                 # edge, since this should be unsatisfied)
 
-        # Compute probability (or log-prob) for each triplet
+        # Compute probability (or log-prob) for each triplet Note that
+        # each of these probabilities are FLIPPED; ie. this is the
+        # probability that the triplet (a,b,c) is VIOLATED
         for t in cython.parallel.prange(no_triplets):
             P = K[triplets_A[t], triplets_C[t]] / (
                 K[triplets_A[t],triplets_B[t]] +
@@ -135,17 +140,20 @@ cpdef tste_grad(npX,
         #         dC[n,i] = (dC[n,i])
     return C, npdC
 
-def tste(triplets,
-         no_dims=2,
-         alpha=None,
-         verbose=True,
-         max_iter=1000,
-         save_each_iteration=False,
-         initial_X=None,
-         static_points=np.array([]),
-         num_threads=None,
-         use_log=False,
-         each_function=False,
+def frankentriplet_tsne(triplets,
+                        distances,
+                        perplexity=30,
+                        no_dims=2,
+                        contrib_cost_triplets=1.0,
+                        contrib_cost_tsne=1.0,
+                        alpha=None,
+                        verbose=True,
+                        max_iter=1000,
+                        initial_X=None,
+                        static_points=np.array([]),
+                        num_threads=None,
+                        use_log=False,
+                        each_function=False,
 ):
     """Learn the triplet embedding for the given triplets.
 
@@ -158,6 +166,7 @@ def tste(triplets,
     triplets: An Nx3 integer array of object indices. Each row is a
               triplet; first column is the 'reference', second column
               is the 'near edge', and third column is the 'far edge'.
+    distances: A square distance matrix for t-SNE.
     no_dims:  Number of dimensions in final embedding. High-dimensional
               embeddings are much easier to satisfy (lower training
               error), but may capture less information.
@@ -165,8 +174,6 @@ def tste(triplets,
               Considered "black magic"; roughly, how much of an impact
               badly satisfying points have on the gradient calculation.
     verbose:  Prints log messages every 10 iterations
-    save_each_iteration: When true, will save intermediate results to
-              a list so you can watch it converge.
     initial_X: The initial set of points to use. Normally distributed if unset.
     num_threads: Parallelism.
     each_function: A function that is called for each gradient update
@@ -181,6 +188,9 @@ def tste(triplets,
 
     N = np.max(triplets) + 1
     assert -1 not in triplets
+    assert 0 in triplets, ("This is not Matlab. Indices should be 0-indexed. "+
+                           "Remove this assertion if you really want point 0 to "+
+                           "have no gradient.")
 
     n_triplets = len(triplets)
 
@@ -190,16 +200,21 @@ def tste(triplets,
     else:
         X = initial_X
 
+    # tSNE perplexity calculation
+    P = _joint_probabilities(distances, perplexity, verbose=10)
 
-    # Cheating!
-    from sklearn.manifold.t_sne import _gradient_descent
-    saved_iterations = []
-    def work(x):
-        saved_iterations.append(x.copy().reshape(N, no_dims))
-        if each_function:
-            each_function(x.copy().reshape(N,no_dims))
-        C,dC = tste_grad(x.reshape(N, no_dims), N, no_dims, triplets, alpha)
+    def grad(x):
+        # t-STE
+        C1,dC1 = tste_grad(x.reshape(N, no_dims), N, no_dims, triplets, alpha)
+        dC1 = dC1.ravel()
 
+        # t-SNE
+        C2,dC2 = _kl_divergence(x, P, alpha, N, no_dims)
+
+        C = contrib_cost_triplets*C1 + contrib_cost_tsne*C2
+        dC = contrib_cost_triplets*dC1 + contrib_cost_tsne*dC2
+
+        # Calculate and report # of triplet violations
         X=x.reshape(N, no_dims)
         sum_X = np.sum(X**2, axis=1)
         D = -2 * (X.dot(X.T)) + sum_X[np.newaxis,:] + sum_X[:,np.newaxis]
@@ -207,70 +222,63 @@ def tste(triplets,
         no_viol = np.sum(D[triplets[:,0],triplets[:,1]] > D[triplets[:,0],triplets[:,2]]);
         print 'Cost is ',C,', number of constraints: ', (float(no_viol) / n_triplets)
 
-        return C, dC.ravel()
+        if each_function:
+            each_function(x.copy().reshape(N,no_dims),
+                          linalg.norm(dC1),
+                          linalg.norm(dC2),
+                          contrib_cost_triplets*linalg.norm(dC1),
+                          contrib_cost_tsne*linalg.norm(dC2),
+                          no_viol,
+                          C,
+            )
+
+        return C, dC
+
+    # Early exaggeration
+    EARLY_EXAGGERATION = 4.0
+    P *= EARLY_EXAGGERATION
     params, iter, it = _gradient_descent(
-        work,
+        grad,
         X.ravel(),
         it=0,
-        n_iter=max_iter,
-        n_iter_without_progress=5,
+        n_iter=50,
+        n_iter_without_progress=300,
         momentum=0.5,
-        learning_rate = (float(2.0) / n_triplets * N),
+        learning_rate = 1.0, # Chosen by the caller!
         min_gain = 1e-5,
         min_grad_norm = 1e-7, # Abort when less
         min_error_diff = 1e-7,
         verbose=5,
     )
+    # Second stage: More momentum
+    params, iter, it = _gradient_descent(
+        grad,
+        X.ravel(),
+        it=it+1,
+        n_iter=max_iter,
+        # n_iter=100,
+        n_iter_without_progress=300,
+        momentum=0.8,
+        learning_rate = 1.0, #(float(2.0) / n_triplets * N),
+        min_gain = 1e-5,
+        min_grad_norm = 1e-7, # Abort when less
+        min_error_diff = 1e-7,
+        verbose=5,
+    )
+    # # Undo early exaggeration
+    # P /= EARLY_EXAGGERATION
+    # params, iter, it = _gradient_descent(
+    #     work,
+    #     X.ravel(),
+    #     it=it+1,
+    #     n_iter=max_iter,
+    #     n_iter_without_progress=300,
+    #     momentum=0.5,
+    #     learning_rate = 1.0, #(float(2.0) / n_triplets * N),
+    #     min_gain = 1e-5,
+    #     min_grad_norm = 1e-7, # Abort when less
+    #     min_error_diff = 1e-7,
+    #     verbose=5,
+    # )
 
-    if save_each_iteration:
-        return params.reshape(N, no_dims), saved_iterations
-    else:
-        return params.reshape(N, no_dims)
-
-    #C = np.Inf
-    #tol = 1e-7              # convergence tolerance
-    #eta = 2.                # learning rate
-    #best_C = np.Inf         # best error obtained so far
-    #best_X = X              # best embedding found so far
-    #iteration_Xs = []       # for debugging ;) *shhhh*
-
-    ## Perform main iterations
-    #iter = 0; no_incr = 0;
-    #while iter < max_iter and no_incr < 5:
-    #    old_C = C
-    #    # Calculate gradient descent and cost
-    #    C, G = tste_grad(X, N, no_dims, triplets, alpha)
-    #    X = X - (float(eta) / n_triplets * N) * G
-
-    #    if C < best_C:
-    #        best_C = C
-    #        best_X = X
-
-    #    # Perform gradient update
-    #    if save_each_iteration:
-    #        iteration_Xs.append(X.copy())
-
-    #    if len(static_points):
-    #        X[static_points] = initial_X[static_points]
-
-    #    # Update learning rate
-    #    if old_C > C + tol:
-    #        no_incr = 0
-    #        eta *= 1.01
-    #    else:
-    #        no_incr = no_incr + 1
-    #        eta *= 0.5
-
-    #    # Print out progress
-    #    iter += 1
-    #    if verbose and iter%10==0:
-    #        # These are Euclidean distances:
-    #        sum_X = np.sum(X**2, axis=1)
-    #        D = -2 * (X.dot(X.T)) + sum_X[np.newaxis,:] + sum_X[:,np.newaxis]
-    #        # ^ D = squared Euclidean distance?
-    #        no_viol = np.sum(D[triplets[:,0],triplets[:,1]] > D[triplets[:,0],triplets[:,2]]);
-    #        print "Iteration ",iter, ' error is ',C,', number of constraints: ', (float(no_viol) / n_triplets)
-
-    #if save_each_iteration:
-    #    return iteration_Xs
-    #return best_X
+    return params.reshape(N, no_dims)
