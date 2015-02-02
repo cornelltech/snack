@@ -140,6 +140,24 @@ cpdef tste_grad(npX,
         #         dC[n,i] = (dC[n,i])
     return C, npdC
 
+# def debug_costs(samples, triplets, X_embedded, perplexity, which):
+#     # tSNE perplexity calculation
+#     P = _joint_probabilities(distances, perplexity, verbose=10)
+#     for i in samples:
+
+#     n = pdist(X_embedded, "sqeuclidean")
+#     n += 1.
+#     n /= alpha
+#     n **= (alpha + 1.0) / -2.0
+#     Q = np.maximum(n / (2.0 * np.sum(n)), MACHINE_EPSILON)
+
+#     # Optimization trick below: np.dot(x, y) is faster than
+#     # np.sum(x * y) because it calls BLAS
+
+#     # Objective: C (Kullback-Leibler divergence of P and Q)
+#     kl_divergence = 2.0 * np.dot(P, np.log(P / Q))
+
+
 def frankentriplet_tsne(triplets,
                         distances,
                         perplexity=30,
@@ -253,10 +271,10 @@ def frankentriplet_tsne(triplets,
     # Second stage: More momentum
     params, iter, it = _gradient_descent(
         grad,
-        X.ravel(),
+        params,
         it=it+1,
-        n_iter=max_iter,
-        # n_iter=100,
+        # n_iter=max_iter,
+        n_iter=100,
         n_iter_without_progress=300,
         momentum=0.8,
         learning_rate = 1.0, #(float(2.0) / n_triplets * N),
@@ -265,8 +283,21 @@ def frankentriplet_tsne(triplets,
         min_error_diff = 1e-7,
         verbose=5,
     )
-    # # Undo early exaggeration
-    # P /= EARLY_EXAGGERATION
+    # Undo early exaggeration
+    P /= EARLY_EXAGGERATION
+    params, iter, it = _gradient_descent(
+        grad,
+        params,
+        it=it+1,
+        n_iter=max_iter,
+        n_iter_without_progress=300,
+        momentum=0.8,
+        learning_rate = 1.0, #(float(2.0) / n_triplets * N),
+        min_gain = 1e-5,
+        min_grad_norm = 1e-7, # Abort when less
+        min_error_diff = 1e-7,
+        verbose=5,
+    )
     # params, iter, it = _gradient_descent(
     #     work,
     #     X.ravel(),
