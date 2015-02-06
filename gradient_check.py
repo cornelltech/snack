@@ -1,6 +1,6 @@
 #!/usr/bin/env python2
 
-import tste_sideinfo as cy_tste
+import _snack as cy_tste # whaaat???
 import numpy as np
 
 for N in [10, 100, 1000]:

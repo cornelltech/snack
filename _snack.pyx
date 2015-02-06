@@ -1,7 +1,8 @@
 #cython: boundscheck=False, wraparound=False, cdivision=True
 
-"""TSTE_sideinfo: t-Distributed Stochastic Triplet Embedding, with
-side information.
+"""SNaCK embedding: Stochastic Neighbor and Crowd Kernel embedding.
+
+Works by stapling together the t-SNE (t-distributed Stochastic Neighbor Embedding) and t-STE (t-distributed Stochastic Triplet Embedding) loss functions.
 
 Original MATLAB implementation of tSTE and tSNE: (C) Laurens van der Maaten, 2012, Delft University of Technology
 
@@ -14,6 +15,7 @@ Curator: Michael Wilber <mjw285@cornell.eu>
 
 cimport numpy as cnp
 import numpy as np
+import numexpr as ne
 from libc.math cimport log
 cimport cython.parallel
 cimport openmp
@@ -158,20 +160,20 @@ cpdef tste_grad(npX,
 #     kl_divergence = 2.0 * np.dot(P, np.log(P / Q))
 
 
-def frankentriplet_tsne(triplets,
-                        distances,
-                        perplexity=30,
-                        no_dims=2,
-                        contrib_cost_triplets=1.0,
-                        contrib_cost_tsne=1.0,
-                        alpha=None,
-                        verbose=True,
-                        max_iter=1000,
-                        initial_X=None,
-                        static_points=np.array([]),
-                        num_threads=None,
-                        use_log=False,
-                        each_function=False,
+def snack_embed(triplets,
+                distances,
+                perplexity=30,
+                no_dims=2,
+                contrib_cost_triplets=1.0,
+                contrib_cost_tsne=1.0,
+                alpha=None,
+                verbose=True,
+                max_iter=1000,
+                initial_X=None,
+                static_points=np.array([]),
+                num_threads=None,
+                use_log=False,
+                each_function=False,
 ):
     """Learn the triplet embedding for the given triplets.
 
