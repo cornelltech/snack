@@ -221,7 +221,7 @@ def snack_embed(triplets,
         X = initial_X
 
     # tSNE perplexity calculation
-    P = _joint_probabilities(distances, perplexity, verbose=10)
+    P = _joint_probabilities(distances, perplexity, verbose=10 if verbose else 0)
 
     def grad(x):
         # t-STE
@@ -240,7 +240,8 @@ def snack_embed(triplets,
         D = -2 * (X.dot(X.T)) + sum_X[np.newaxis,:] + sum_X[:,np.newaxis]
         # ^ D = squared Euclidean distance?
         no_viol = np.sum(D[triplets[:,0],triplets[:,1]] > D[triplets[:,0],triplets[:,2]]);
-        print 'Cost is ',C,', number of constraints: ', (float(no_viol) / n_triplets)
+        if verbose:
+            print 'Cost is ',C,', number of constraints: ', (float(no_viol) / n_triplets)
 
         if each_function:
             each_function(x.copy().reshape(N,no_dims),
@@ -268,7 +269,7 @@ def snack_embed(triplets,
         min_gain = 1e-5,
         min_grad_norm = 1e-7, # Abort when less
         min_error_diff = 1e-7,
-        verbose=5,
+        verbose=5 if verbose else 0,
     )
     # Second stage: More momentum
     params, iter, it = _gradient_descent(
@@ -283,7 +284,7 @@ def snack_embed(triplets,
         min_gain = 1e-5,
         min_grad_norm = 1e-7, # Abort when less
         min_error_diff = 1e-7,
-        verbose=5,
+        verbose=5 if verbose else 0,
     )
     # Undo early exaggeration
     P /= EARLY_EXAGGERATION
@@ -298,7 +299,7 @@ def snack_embed(triplets,
         min_gain = 1e-5,
         min_grad_norm = 1e-7, # Abort when less
         min_error_diff = 1e-7,
-        verbose=5,
+        verbose=5 if verbose else 0,
     )
     # params, iter, it = _gradient_descent(
     #     work,
