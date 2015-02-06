@@ -224,7 +224,7 @@ def snack_embed(triplets,
     P = _joint_probabilities(distances, perplexity, verbose=10 if verbose else 0)
 
     # Normalize triplet cost by the number of triplets that we have
-    contrib_cost_triplets = contrib_cost_triplets*(2.0 / float(n_triplets) * len(N))
+    contrib_cost_triplets = contrib_cost_triplets*(2.0 / float(n_triplets) * float(N))
 
     def grad(x):
         # t-STE
