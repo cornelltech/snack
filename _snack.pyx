@@ -223,6 +223,9 @@ def snack_embed(triplets,
     # tSNE perplexity calculation
     P = _joint_probabilities(distances, perplexity, verbose=10 if verbose else 0)
 
+    # Normalize triplet cost by the number of triplets that we have
+    contrib_cost_triplets = contrib_cost_triplets*(2.0 / float(n_triplets) * len(N))
+
     def grad(x):
         # t-STE
         C1,dC1 = tste_grad(x.reshape(N, no_dims), N, no_dims, triplets, alpha)
