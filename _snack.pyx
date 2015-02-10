@@ -13,16 +13,176 @@ Curator: Michael Wilber <mjw285@cornell.eu>
 
 """
 
-cimport numpy as cnp
-import numpy as np
-import numexpr as ne
-from libc.math cimport log
+cimport cython
+cimport numpy as np
 cimport cython.parallel
 cimport openmp
 
-from scipy import linalg
+import numpy as np
+import tempfile
+import os
+import gc
 
-from sklearn.manifold.t_sne import _gradient_descent, _kl_divergence, _joint_probabilities
+from libc cimport math
+from scipy import linalg
+from sklearn.manifold.t_sne import _gradient_descent, _kl_divergence
+from sklearn.manifold import _utils
+from scipy.spatial.distance import squareform
+
+cdef extern from "numpy/npy_math.h":
+    float NPY_INFINITY
+
+cdef double EPSILON_DBL = 1e-7
+cdef double PERPLEXITY_TOLERANCE = 1e-5
+cdef double MACHINE_EPSILON = np.finfo(np.double).eps
+
+def my_joint_probabilities(
+        np.ndarray[np.double_t, ndim=2] distances,
+        desired_perplexity,
+        verbose):
+    """Compute joint probabilities p_ij from distances.
+
+    Just like t_sne._joint_probabilities, but this one avoids
+    unnecessary allocations.
+
+    Parameters
+    ----------
+    distances : array, shape (n_samples * (n_samples-1) / 2,)
+        Distances of samples are stored as condensed matrices, i.e.
+        we omit the diagonal and duplicate entries and store everything
+        in a one-dimensional array.
+
+    desired_perplexity : float
+        Desired perplexity of the joint probability distributions.
+
+    verbose : int
+        Verbosity level.
+
+    Returns
+    -------
+    P : array, shape (n_samples * (n_samples-1) / 2,)
+        Condensed joint probability matrix.
+
+    """
+    # Compute conditional probabilities such that they approximately match
+    # the desired perplexity
+
+    # Make a temporary mmapped file, for memory safety
+    conditional_P = _utils._binary_search_perplexity(
+        distances, desired_perplexity, verbose)
+    cdef double[:, ::1] cPview = conditional_P
+
+    # Symmetricise
+    cdef int n_samples = len(conditional_P)
+    cdef int i,j
+    for i in xrange(n_samples):
+        for j in xrange(i+1, n_samples):
+            cPview[i,j] = cPview[i,j] + cPview[j,i]
+            cPview[j,i] = cPview[i,j]
+    sum_P = np.maximum(np.sum(conditional_P), MACHINE_EPSILON)
+
+    # Turn into probabilities
+    npP = squareform(conditional_P)
+    cdef double[::1] P = npP
+    del conditional_P, cPview
+    for i in xrange(len(P)):
+        P[i] = P[i] / sum_P
+        if P[i] < MACHINE_EPSILON:
+            P[i] = MACHINE_EPSILON
+    return npP
+
+
+def my_kl_divergence(
+        params,
+        double [::1] P,
+        double alpha,
+        int n_samples,
+        int n_components):
+    """t-SNE objective function: KL divergence of p_ijs and q_ijs.
+
+    Just like sklearn.manifold.t_sne._kl_divergence, but this version
+    avoids spurious allocations.
+
+    Parameters
+    ----------
+    params : array, shape (n_params,)
+        Unraveled embedding.
+
+    P : array, shape (n_samples * (n_samples-1) / 2,)
+        Condensed joint probability matrix.
+
+    alpha : float
+        Degrees of freedom of the Student's-t distribution.
+
+    n_samples : int
+        Number of samples.
+
+    n_components : int
+        Dimension of the embedded space.
+
+    Returns
+    -------
+    kl_divergence : float
+        Kullback-Leibler divergence of p_ij and q_ij.
+
+    grad : array, shape (n_params,)
+        Unraveled gradient of the Kullback-Leibler divergence with respect to
+        the embedding.
+
+    """
+    cdef double[:,::1] X_embedded = params.reshape(n_samples, n_components)
+
+    # Step 1: Calculate sum(n)
+    cdef double sum_n = 0.0
+    cdef int i,j,k
+    cdef double dist
+    for i in xrange(n_samples):
+        for j in xrange(i+1, n_samples):
+            dist = 0
+            for k in xrange(n_components):
+                dist += ((X_embedded[i,k]-X_embedded[j,k]) *
+                         (X_embedded[i,k]-X_embedded[j,k]))
+            sum_n = sum_n + ((1+dist)/alpha) ** ((alpha+1.0) / -2.0)
+
+    # Step 2: Calculate Q, which is the Student's t-distribution here.
+    # (Trading off memory use for speed here)
+    # I'm also inlining the calculation for the gradient here.
+    npgrad = np.zeros((n_samples, n_components), dtype='double')
+    cdef double[:,::1] grad = npgrad
+    cdef double kl_divergence = 0.0
+    cdef double Q = 0.0
+    cdef int dim_idx = 0
+    for i in xrange(n_samples):
+        for j in xrange(i+1, n_samples):
+            dist = 0
+            for k in xrange(n_components):
+                dist += ((X_embedded[i,k]-X_embedded[j,k]) *
+                         (X_embedded[i,k]-X_embedded[j,k]))
+
+            # What's this Q?
+            Q = ((1+dist)/alpha) ** ((alpha+1.0) / -2.0)
+            Q = max(Q/ (2.0 * sum_n), MACHINE_EPSILON)
+
+            kl_divergence += 2.0 * P[dim_idx] * math.log(P[dim_idx] / Q)
+
+            dim_idx += 1
+
+        # Inline: Add j's result to grad[i]
+        for j in xrange(n_samples):
+            if i==j: continue
+            # verified in my notebook :S .... but I do hate it!
+            # see "2015-02-06 Make tSNE part use less memory"
+            dim_idx = n_samples*min(i,j) - (min(i,j)*(min(i,j) + 3)/2) + max(i,j) - 1
+            for k in xrange(n_components):
+                grad[i,k] += (
+                    # PQd
+                    (P[dim_idx] - Q) * ((1+dist)/alpha) ** ((alpha+1.0) / -2.0)
+                    # Difference between this point and every other point
+                    * (X_embedded[i,k] - X_embedded[j, k])
+                ) * (2.0 * (alpha + 1.0) / alpha) # this is c
+
+    return kl_divergence, npgrad.ravel()
+
 
 cpdef tste_grad(npX,
                 int N,
@@ -221,7 +381,7 @@ def snack_embed(triplets,
         X = initial_X
 
     # tSNE perplexity calculation
-    P = _joint_probabilities(distances, perplexity, verbose=10 if verbose else 0)
+    P = my_joint_probabilities(distances, perplexity, verbose=10 if verbose else 0)
 
     # Normalize triplet cost by the number of triplets that we have
     contrib_cost_triplets = contrib_cost_triplets*(2.0 / float(n_triplets) * float(N))
@@ -232,7 +392,7 @@ def snack_embed(triplets,
         dC1 = dC1.ravel()
 
         # t-SNE
-        C2,dC2 = _kl_divergence(x, P, alpha, N, no_dims)
+        C2,dC2 = my_kl_divergence(x, P, alpha, N, no_dims)
 
         C = contrib_cost_triplets*C1 + contrib_cost_tsne*C2
         dC = contrib_cost_triplets*dC1 + contrib_cost_tsne*dC2
@@ -240,10 +400,11 @@ def snack_embed(triplets,
         # Calculate and report # of triplet violations
         X=x.reshape(N, no_dims)
         sum_X = np.sum(X**2, axis=1)
-        D = -2 * (X.dot(X.T)) + sum_X[np.newaxis,:] + sum_X[:,np.newaxis]
-        # ^ D = squared Euclidean distance?
-        no_viol = np.sum(D[triplets[:,0],triplets[:,1]] > D[triplets[:,0],triplets[:,2]]);
+        no_viol = -1
         if verbose:
+            D = -2 * (X.dot(X.T)) + sum_X[np.newaxis,:] + sum_X[:,np.newaxis]
+            # ^ D = squared Euclidean distance?
+            no_viol = np.sum(D[triplets[:,0],triplets[:,1]] > D[triplets[:,0],triplets[:,2]]);
             print 'Cost is ',C,', number of constraints: ', (float(no_viol) / n_triplets)
 
         if each_function:
