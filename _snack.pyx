@@ -36,6 +36,32 @@ cdef double EPSILON_DBL = 1e-7
 cdef double PERPLEXITY_TOLERANCE = 1e-5
 cdef double MACHINE_EPSILON = np.finfo(np.double).eps
 
+TEMP_FOLDER = "/tmp/"
+
+def set_temp_folder(fdr):
+    global TEMP_FOLDER
+    TEMP_FOLDER = fdr
+
+def mmapped_zeros(shape, dtype):
+    """Return a array that is automatically persisted to disk. Useful for
+    machines without a lot of memory or swap.
+
+    The resource is deleted when the array is garbage-collected.
+    """
+    global TEMP_FOLDER
+    # In theory, all this should be equivalent to
+    return np.zeros(shape=shape, dtype=dtype)
+    # but it should magically work when your machine doesn't have memory but does have hard disk.
+    # To see how many memmaps we have active (watch your gc!),
+    # run pmap $PID | grep .mmap
+    (_, filename) = tempfile.mkstemp(suffix='.mmap',
+                                     dir=TEMP_FOLDER,
+                                     )
+    os.unlink(filename)
+    A = np.memmap(filename, shape=shape, dtype=dtype, mode='w+')
+    os.unlink(filename)
+    return A
+
 def my_joint_probabilities(
         np.ndarray[np.double_t, ndim=2] distances,
         desired_perplexity,
@@ -189,6 +215,8 @@ cpdef tste_grad(npX,
                 int no_dims,
                 long [:, ::1] triplets,
                 double alpha,
+                double[:,::1] K,
+                double[:,::1] Q,
 ):
     """Compute the cost function and gradient update of t-STE.
 
@@ -218,8 +246,9 @@ cpdef tste_grad(npX,
     cdef double C = 0
     cdef double A_to_B, A_to_C, const
     cdef double[::1] sum_X = np.zeros((N,), dtype='float64')
-    cdef double[:, ::1] K = np.zeros((N, N), dtype='float64')
-    cdef double[:, ::1] Q = np.zeros((N, N), dtype='float64')
+    # Don't need to reinitialize K, Q because they're initialized below in the loop.
+    assert K.shape[0] == N; assert K.shape[1] == N
+    assert Q.shape[0] == N; assert Q.shape[1] == N
     npdC = np.zeros((N, no_dims), 'float64')
     cdef double[:, ::1] dC = npdC
     cdef double[:, :, ::1] dC_part = np.zeros((no_triplets, no_dims, 3), 'float64')
@@ -328,7 +357,7 @@ def snack_embed(triplets,
                 contrib_cost_tsne=1.0,
                 alpha=None,
                 verbose=True,
-                max_iter=1000,
+                max_iter=300,
                 initial_X=None,
                 static_points=np.array([]),
                 num_threads=None,
@@ -386,9 +415,13 @@ def snack_embed(triplets,
     # Normalize triplet cost by the number of triplets that we have
     contrib_cost_triplets = contrib_cost_triplets*(2.0 / float(n_triplets) * float(N))
 
+    cdef double[:,::1] K = mmapped_zeros((N, N), dtype='float64')
+    cdef double[:,::1] Q = mmapped_zeros((N, N), dtype='float64')
+
     def grad(x):
         # t-STE
-        C1,dC1 = tste_grad(x.reshape(N, no_dims), N, no_dims, triplets, alpha)
+        C1,dC1 = tste_grad(x.reshape(N, no_dims), N, no_dims, triplets, alpha,
+                           K, Q)
         dC1 = dC1.ravel()
 
         # t-SNE
@@ -402,10 +435,10 @@ def snack_embed(triplets,
         sum_X = np.sum(X**2, axis=1)
         no_viol = -1
         if verbose:
-            D = -2 * (X.dot(X.T)) + sum_X[np.newaxis,:] + sum_X[:,np.newaxis]
-            # ^ D = squared Euclidean distance?
-            no_viol = np.sum(D[triplets[:,0],triplets[:,1]] > D[triplets[:,0],triplets[:,2]]);
-            print 'Cost is ',C,', number of constraints: ', (float(no_viol) / n_triplets)
+            #D = -2 * (X.dot(X.T)) + sum_X[np.newaxis,:] + sum_X[:,np.newaxis]
+            ## ^ D = squared Euclidean distance?
+            #no_viol = np.sum(D[triplets[:,0],triplets[:,1]] > D[triplets[:,0],triplets[:,2]]);
+            print 'Cost is ',C #,', number of constraints: ', (float(no_viol) / n_triplets)
 
         if each_function:
             each_function(x.copy().reshape(N,no_dims),
