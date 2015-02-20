@@ -395,7 +395,7 @@ def snack_embed(triplets,
     if alpha is None:
         alpha = no_dims-1
 
-    N = np.max(triplets) + 1
+    cdef unsigned int N = len(distances)
     assert -1 not in triplets
     assert 0 in triplets, ("This is not Matlab. Indices should be 0-indexed. "+
                            "Remove this assertion if you really want point 0 to "+
