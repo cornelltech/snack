@@ -169,6 +169,7 @@ def my_kl_divergence(
                 dist += ((X_embedded[i,k]-X_embedded[j,k]) *
                          (X_embedded[i,k]-X_embedded[j,k]))
             sum_n = sum_n + ((1+dist)/alpha) ** ((alpha+1.0) / -2.0)
+    # now sum_n is correct!
 
     # Step 2: Calculate Q, which is the Student's t-distribution here.
     # (Trading off memory use for speed here)
@@ -180,6 +181,7 @@ def my_kl_divergence(
     cdef int dim_idx = 0
     for i in xrange(n_samples):
         for j in xrange(i+1, n_samples):
+            dim_idx = n_samples*min(i,j) - (min(i,j)*(min(i,j) + 3)/2) + max(i,j) - 1
             dist = 0
             for k in xrange(n_components):
                 dist += ((X_embedded[i,k]-X_embedded[j,k]) *
@@ -191,21 +193,25 @@ def my_kl_divergence(
 
             kl_divergence += 2.0 * P[dim_idx] * math.log(P[dim_idx] / Q)
 
-            dim_idx += 1
-
         # Inline: Add j's result to grad[i]
         for j in xrange(n_samples):
-            if i==j: continue
-            # verified in my notebook :S .... but I do hate it!
-            # see "2015-02-06 Make tSNE part use less memory"
-            dim_idx = n_samples*min(i,j) - (min(i,j)*(min(i,j) + 3)/2) + max(i,j) - 1
-            for k in xrange(n_components):
-                grad[i,k] += (
-                    # PQd
-                    (P[dim_idx] - Q) * ((1+dist)/alpha) ** ((alpha+1.0) / -2.0)
-                    # Difference between this point and every other point
-                    * (X_embedded[i,k] - X_embedded[j, k])
-                ) * (2.0 * (alpha + 1.0) / alpha) # this is c
+            if i!=j:
+                # verified in my notebook :S .... but I do hate it!
+                # see "2015-02-06 Make tSNE part use less memory"
+                dim_idx = n_samples*min(i,j) - (min(i,j)*(min(i,j) + 3)/2) + max(i,j) - 1
+                dist = 0
+                for k in xrange(n_components):
+                    dist += ((X_embedded[i,k]-X_embedded[j,k]) *
+                             (X_embedded[i,k]-X_embedded[j,k]))
+                Q = ((1+dist)/alpha) ** ((alpha+1.0) / -2.0)
+                Q = max(Q/ (2.0 * sum_n), MACHINE_EPSILON)
+                for k in xrange(n_components):
+                    grad[i,k] += (
+                        # PQd
+                        (P[dim_idx] - Q) * ((1+dist)/alpha) ** ((alpha+1.0) / -2.0)
+                        # Difference between this point and every other point
+                        * (X_embedded[i,k] - X_embedded[j, k])
+                    ) * (2.0 * (alpha + 1.0) / alpha) # this is c
 
     return kl_divergence, npgrad.ravel()
 
