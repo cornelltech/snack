@@ -403,9 +403,10 @@ def snack_embed(triplets,
 
     cdef unsigned int N = len(distances)
     assert -1 not in triplets
-    assert 0 in triplets, ("This is not Matlab. Indices should be 0-indexed. "+
-                           "Remove this assertion if you really want point 0 to "+
-                           "have no gradient.")
+    if False:
+        assert 0 in triplets, ("This is not Matlab. Indices should be 0-indexed. "+
+                               "Remove this assertion if you really want point 0 to "+
+                               "have no gradient.")
 
     n_triplets = len(triplets)
 
