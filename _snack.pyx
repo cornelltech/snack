@@ -36,6 +36,193 @@ cdef double EPSILON_DBL = 1e-7
 cdef double PERPLEXITY_TOLERANCE = 1e-5
 cdef double MACHINE_EPSILON = np.finfo(np.double).eps
 
+from libc.stdlib cimport malloc, free
+
+# External wrappers
+cdef extern from "lib-bhtsne/tsne.h":
+    cdef cppclass TSNE:
+        void run(double* X, int N, int D, double* Y, int no_dims, double perplexity, double theta);
+        void computeGradient(double* P, int* inp_row_P, int* inp_col_P, double* inp_val_P, double* Y, int N, int D, double* dC, double theta);
+        void computeExactGradient(double* P, double* Y, int N, int D, double* dC);
+        double evaluateError(double* P, double* Y, int N, int D);
+        double evaluateError(int* row_P, int* col_P, double* val_P, double* Y, int N, int D, double theta);
+        void computeGaussianPerplexity(double* X, int N, int D, double* P, double perplexity)
+        void computeGaussianPerplexity(double* X, int N, int D, int** _row_P, int** _col_P, double** _val_P, double perplexity, int K);
+        void computeGaussianPerplexity(double* X, int N, int D, int** _row_P, int** _col_P, double** _val_P, double perplexity, double threshold);
+        void symmetrizeMatrix(int** _row_P, int** _col_P, double** _val_P, int N)
+        void zeroMean(double* X, int N, int D)
+
+
+def run_tsne_from_laurens(double [:, ::1] X, int no_dims, double perplexity, double theta = 0.01):
+    cdef TSNE t
+    Ynp = np.zeros((len(X), no_dims), dtype='double')
+    cdef double [:, ::1] Y = Ynp
+    t.run(&(X[0,0]), X.shape[0], X.shape[1], &(Y[0,0]), no_dims, perplexity, theta)
+    return Ynp
+
+
+def run_tsne(X_np, int no_dims, double perplexity, double theta = 0.01, verbose=True):
+    def logf(s, *args):
+        if verbose: print s%args
+
+    cdef TSNE t
+
+    # We modify this in-place
+    X_np = X_np.copy()
+    cdef double[:, ::1] X = X_np
+    cdef int N = X_np.shape[0], D = X_np.shape[1]
+    cdef int n, m, i, j, k
+
+    if N-1 < 3 * perplexity:
+        raise ValueError("Perplexity too large for the number of data points!")
+
+    logf("Using no_dims = %d, perplexity = %f, and theta = %f", no_dims, perplexity, theta)
+
+    exact = (theta == 0)
+    cdef int max_iter = 1000, stop_lying_iter = 250, mom_switch_iter = 250;
+    cdef double momentum = .5, final_momentum = .8;
+    cdef double eta = 200.0;
+
+    dY_np = np.zeros((N, no_dims), 'double')
+    uY_np = np.zeros((N, no_dims), 'double')
+    gains_np = np.zeros((N, no_dims), 'double') + 1.0
+    cdef double[:, ::1] dY = dY_np
+    cdef double[:, ::1] uY = uY_np
+    cdef double[:, ::1] gains = gains_np
+
+    cdef int *row_P, *col_P
+    cdef double *val_P
+
+    logf("Computing input similarities...")
+    X_np -= np.mean(X_np, 0)
+    X_np /= np.max(np.abs(X_np))
+
+    cdef double[:, ::1] P
+    cdef double sum_P
+
+    P_np = None
+
+    if exact:
+        # Compute similarities
+        P_np = np.zeros((N,N), 'double')
+        P=P_np
+        t.computeGaussianPerplexity(&X[0,0], N, D, &P[0,0], perplexity)
+
+        logf("Symmetrizing...")
+        for n in xrange(N):
+            for m in xrange(n+1, N):
+                P[n,m] += P[m,n]
+                P[m,n] = P[n,m]
+
+        sum_P = .0
+        for i in xrange(N):
+            for j in xrange(N):
+                sum_P += P[i,j]
+        for i in xrange(N):
+            for j in xrange(N):
+                P[i,j] = P[i,j] / sum_P
+
+    else:
+        # Compute input similarities for approximate t-SNE
+        # This allocates memory!
+        t.computeGaussianPerplexity(<double*> &X[0,0],
+                                    <int> N,
+                                    <int> D,
+                                    <int**> &row_P,
+                                    <int**> &col_P,
+                                    <double**> &val_P,
+                                    <double> perplexity,
+                                    <int> int(3 * perplexity))
+        t.symmetrizeMatrix(&row_P, &col_P, &val_P, N)
+
+        sum_P = .0
+        for i in xrange(row_P[N]):
+            sum_P += val_P[i]
+        for i in xrange(row_P[N]):
+            val_P[i] /= sum_P
+
+    # Lie about the P-values
+    if exact:
+        P_np *= 12.0
+    else:
+        for i in xrange(row_P[N]):
+            val_P[i] *= 12.0
+
+    # Initialize solution (randomly)
+    Y_np = np.random.randn(N, no_dims) * 0.0001
+    cdef double[:, ::1] Y = Y_np
+
+    if exact:
+        logf("Learning embedding...")
+    else:
+        logf("Sparsity = %f! Learning embedding...", row_P[N] / (N*N))
+
+    for iter in xrange(max_iter):
+        if exact:
+            t.computeExactGradient(&P[0,0], &Y[0,0], N, no_dims, &dY[0,0])
+        else:
+            t.computeGradient(NULL, row_P, col_P, val_P, &Y[0,0], N, no_dims, &dY[0,0], theta)
+            # note that the first parameter is really unused
+
+        # Update gains
+        for i in xrange(N):
+            for j in xrange(no_dims):
+                gains[i,j] = gains[i,j] + 0.2 if (dY[i,j]*uY[i,j] < 0) else gains[i,j]*0.8
+                if gains[i,j] < 0.01:
+                    gains[i,j] = 0.01
+
+        # Perform gradient update with momentum and gains
+        for i in xrange(N):
+            for j in xrange(no_dims):
+                uY[i,j] = momentum * uY[i,j] - eta * gains[i,j] * dY[i,j]
+                Y[i,j] = Y[i,j] + uY[i,j]
+                # Y[i,j] = Y[i,j] + dY[i,j]
+
+        Y_np -= np.mean(Y_np, 0)
+
+        # Stop lying about the P-values after a while, and switch momentum
+        if iter == stop_lying_iter:
+            if exact:
+                P_np /= 12.0
+            else:
+                for i in xrange(row_P[N]):
+                    val_P[i] /= 12.0
+
+        if iter == mom_switch_iter:
+            momentum = final_momentum
+
+        print "."
+        if iter%50==0:
+            print iter
+
+    #     // Print out progress
+    #     if(iter > 0 && (iter % 50 == 0 || iter == max_iter - 1)) {
+    #         end = clock();
+    #         double C = .0;
+    #         if(exact) C = evaluateError(P, Y, N, no_dims);
+    #         else      C = evaluateError(row_P, col_P, val_P, Y, N, no_dims, theta);  // doing approximate computation here!
+    #         if(iter == 0)
+    #             printf("Iteration %d: error is %f\n", iter + 1, C);
+    #         else {
+    #             total_time += (float) (end - start) / CLOCKS_PER_SEC;
+    #             printf("Iteration %d: error is %f (50 iterations in %4.2f seconds)\n", iter, C, (float) (end - start) / CLOCKS_PER_SEC);
+    #         }
+    #     		start = clock();
+    #     }
+    # }
+    # end = clock(); total_time += (float) (end - start) / CLOCKS_PER_SEC;
+
+    if not exact:
+        free(row_P)
+        free(col_P)
+        free(val_P)
+
+    return Y_np
+
+
+
+
+
 TEMP_FOLDER = "/tmp/"
 
 def set_temp_folder(fdr):

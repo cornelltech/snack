@@ -2,4 +2,5 @@ build
 *.c
 *.so
 *.pyx
+*.cpp
 *.pyc

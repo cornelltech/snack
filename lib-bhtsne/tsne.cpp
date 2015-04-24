@@ -102,6 +102,9 @@ void TSNE::run(double* X, int N, int D, double* Y, int no_dims, double perplexit
         double sum_P = .0;
         for(int i = 0; i < N * N; i++) sum_P += P[i];
         for(int i = 0; i < N * N; i++) P[i] /= sum_P;
+
+        printf("P[430,215]: %.10e\n", P[430*N+215]);
+        printf("P[0,1]: %.10e\n", P[1]);
     }
 
     // Compute input similarities for approximate t-SNE
@@ -418,7 +421,7 @@ void TSNE::computeGaussianPerplexity(double* X, int N, int D, int** _row_P, int*
     vector<double> distances;
     for(int n = 0; n < N; n++) {
 
-        if(n % 10000 == 0) printf(" - point %d of %d\n", n, N);
+        if(n % 10 == 0) printf(" - point %d of %d\n", n, N);
 
         // Find nearest neighbors
         indices.clear();
