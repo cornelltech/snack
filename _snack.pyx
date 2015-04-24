@@ -24,21 +24,9 @@ import os
 import gc
 
 from libc cimport math
-from scipy import linalg
-from sklearn.manifold.t_sne import _gradient_descent, _kl_divergence
-from sklearn.manifold import _utils
-from scipy.spatial.distance import squareform
-
-cdef extern from "numpy/npy_math.h":
-    float NPY_INFINITY
-
-cdef double EPSILON_DBL = 1e-7
-cdef double PERPLEXITY_TOLERANCE = 1e-5
-cdef double MACHINE_EPSILON = np.finfo(np.double).eps
-
 from libc.stdlib cimport malloc, free
 
-# External wrappers
+# External wrappers for Barnes Hut t-SNE:
 cdef extern from "lib-bhtsne/tsne.h":
     cdef cppclass TSNE:
         void run(double* X, int N, int D, double* Y, int no_dims, double perplexity, double theta);
@@ -52,7 +40,6 @@ cdef extern from "lib-bhtsne/tsne.h":
         void symmetrizeMatrix(int** _row_P, int** _col_P, double** _val_P, int N)
         void zeroMean(double* X, int N, int D)
 
-
 def run_tsne_from_laurens(double [:, ::1] X, int no_dims, double perplexity, double theta = 0.01):
     cdef TSNE t
     Ynp = np.zeros((len(X), no_dims), dtype='double')
@@ -60,28 +47,109 @@ def run_tsne_from_laurens(double [:, ::1] X, int no_dims, double perplexity, dou
     t.run(&(X[0,0]), X.shape[0], X.shape[1], &(Y[0,0]), no_dims, perplexity, theta)
     return Ynp
 
+cdef class Inexact_BHTSNE(object):
+    cdef TSNE tsne
+    cdef int *row_P
+    cdef int *col_P
+    cdef double *val_P
+    cdef int N
+
+    def calculate_perplexity(self, double [:, ::1] X, double perplexity):
+        cdef int N = X.shape[0], D = X.shape[1]
+        self.N = N
+        self.tsne.computeGaussianPerplexity(<double*> &X[0,0],
+                                            <int> N,
+                                            <int> D,
+                                            <int**> &self.row_P,
+                                            <int**> &self.col_P,
+                                            <double**> &self.val_P,
+                                            <double> perplexity,
+                                            <int> int(3 * perplexity))
+
+        self.tsne.symmetrizeMatrix(&self.row_P, &self.col_P, &self.val_P, N)
+
+        cdef double sum_P = .0
+        for i in xrange(self.row_P[N]):
+            sum_P += self.val_P[i]
+        for i in xrange(self.row_P[N]):
+            self.val_P[i] /= sum_P
+
+    def multiply_p(self, double factor):
+        cdef int i
+        for i in xrange(self.row_P[self.N]):
+            self.val_P[i] *= factor
+
+    def calculate_gradient(self, double [:, ::1] Y, int no_dims, double[:, ::1] dY, double theta):
+        self.tsne.computeGradient(NULL, self.row_P, self.col_P, self.val_P, &Y[0,0], Y.shape[0], no_dims, &dY[0,0], theta)
+
+    def error(self, double[:, ::1] Y, theta):
+        return self.tsne.evaluateError(<int*>self.row_P,
+                                       <int*>self.col_P,
+                                       <double*>self.val_P,
+                                       <double*>&Y[0,0],
+                                       <int>Y.shape[0],
+                                       <int>Y.shape[1],
+                                       <double>theta)
+
+    def destroy(self):
+        free(self.row_P)
+        free(self.col_P)
+        free(self.val_P)
+        self.row_P = NULL
+        self.col_P = NULL
+        self.val_P = NULL
+
+cdef class Exact_BHTSNE(object):
+    cdef TSNE tsne
+    cdef object P_np
+
+    def calculate_perplexity(self, double [:, ::1] X, double perplexity):
+        cdef int N = X.shape[0], D = X.shape[1]
+        # Compute similarities
+        self.P_np = np.zeros((N,N), 'double')
+        cdef double[:, ::1] P = self.P_np
+        self.tsne.computeGaussianPerplexity(&X[0,0], N, D, &P[0,0], perplexity)
+        cdef int n,m
+        for n in xrange(N):
+            for m in xrange(n+1, N):
+                P[n,m] += P[m,n]
+                P[m,n] = P[n,m]
+
+        cdef double sum_P = .0
+        for i in xrange(N):
+            for j in xrange(N):
+                sum_P += P[i,j]
+        for i in xrange(N):
+            for j in xrange(N):
+                P[i,j] = P[i,j] / sum_P
+
+    def multiply_p(self, double factor):
+        self.P_np *= factor
+
+    def calculate_gradient(self, double [:, ::1] Y, int no_dims, double[:, ::1] dY, double theta):
+        cdef double[:, ::1] P = self.P_np
+        self.tsne.computeExactGradient(&P[0,0], &Y[0,0], Y.shape[0], no_dims, &dY[0,0])
+
+    def destroy(self):
+        pass # the gc will get self.P_np
+
+    def error(self, double[:, ::1] Y, theta):
+        cdef double[:,::1] P = self.P_np
+        return self.tsne.evaluateError(&P[0,0], &Y[0,0], Y.shape[0], Y.shape[1])
+
+
+
 
 def run_tsne(X_np, int no_dims, double perplexity, double theta = 0.01, verbose=True):
     def logf(s, *args):
         if verbose: print s%args
 
-    cdef TSNE t
-
-    # We modify this in-place
-    X_np = X_np.copy()
-    cdef double[:, ::1] X = X_np
-    cdef int N = X_np.shape[0], D = X_np.shape[1]
-    cdef int n, m, i, j, k
-
-    if N-1 < 3 * perplexity:
-        raise ValueError("Perplexity too large for the number of data points!")
-
-    logf("Using no_dims = %d, perplexity = %f, and theta = %f", no_dims, perplexity, theta)
-
-    exact = (theta == 0)
     cdef int max_iter = 1000, stop_lying_iter = 250, mom_switch_iter = 250;
     cdef double momentum = .5, final_momentum = .8;
     cdef double eta = 200.0;
+
+    cdef int N = X_np.shape[0], D = X_np.shape[1]
+    cdef int n, m, i, j, k
 
     dY_np = np.zeros((N, no_dims), 'double')
     uY_np = np.zeros((N, no_dims), 'double')
@@ -90,79 +158,42 @@ def run_tsne(X_np, int no_dims, double perplexity, double theta = 0.01, verbose=
     cdef double[:, ::1] uY = uY_np
     cdef double[:, ::1] gains = gains_np
 
-    cdef int *row_P, *col_P
-    cdef double *val_P
-
-    logf("Computing input similarities...")
+    # We modify this in-place
+    X_np = X_np.copy()
+    cdef double[:, ::1] X = X_np
     X_np -= np.mean(X_np, 0)
     X_np /= np.max(np.abs(X_np))
 
-    cdef double[:, ::1] P
-    cdef double sum_P
+    if N-1 < 3 * perplexity:
+        raise ValueError("Perplexity too large for the number of data points!")
 
-    P_np = None
+    logf("Using no_dims = %d, perplexity = %f, and theta = %f", no_dims, perplexity, theta)
+
+    exact = (theta == 0)
 
     if exact:
-        # Compute similarities
-        P_np = np.zeros((N,N), 'double')
-        P=P_np
-        t.computeGaussianPerplexity(&X[0,0], N, D, &P[0,0], perplexity)
-
-        logf("Symmetrizing...")
-        for n in xrange(N):
-            for m in xrange(n+1, N):
-                P[n,m] += P[m,n]
-                P[m,n] = P[n,m]
-
-        sum_P = .0
-        for i in xrange(N):
-            for j in xrange(N):
-                sum_P += P[i,j]
-        for i in xrange(N):
-            for j in xrange(N):
-                P[i,j] = P[i,j] / sum_P
-
+        tsne_evaluator = Exact_BHTSNE()
     else:
-        # Compute input similarities for approximate t-SNE
-        # This allocates memory!
-        t.computeGaussianPerplexity(<double*> &X[0,0],
-                                    <int> N,
-                                    <int> D,
-                                    <int**> &row_P,
-                                    <int**> &col_P,
-                                    <double**> &val_P,
-                                    <double> perplexity,
-                                    <int> int(3 * perplexity))
-        t.symmetrizeMatrix(&row_P, &col_P, &val_P, N)
+        tsne_evaluator = Inexact_BHTSNE()
 
-        sum_P = .0
-        for i in xrange(row_P[N]):
-            sum_P += val_P[i]
-        for i in xrange(row_P[N]):
-            val_P[i] /= sum_P
+    logf("Computing input similarities...")
+    tsne_evaluator.calculate_perplexity(X, perplexity)
 
     # Lie about the P-values
-    if exact:
-        P_np *= 12.0
-    else:
-        for i in xrange(row_P[N]):
-            val_P[i] *= 12.0
+    tsne_evaluator.multiply_p(12)
 
     # Initialize solution (randomly)
     Y_np = np.random.randn(N, no_dims) * 0.0001
     cdef double[:, ::1] Y = Y_np
 
-    if exact:
-        logf("Learning embedding...")
-    else:
-        logf("Sparsity = %f! Learning embedding...", row_P[N] / (N*N))
+    logf("Learning embedding...")
+    # if exact:
+    #     logf("Learning embedding...")
+    # else:
+    #     logf("Sparsity = %f! Learning embedding...", row_P[N] / (N*N))
 
     for iter in xrange(max_iter):
-        if exact:
-            t.computeExactGradient(&P[0,0], &Y[0,0], N, no_dims, &dY[0,0])
-        else:
-            t.computeGradient(NULL, row_P, col_P, val_P, &Y[0,0], N, no_dims, &dY[0,0], theta)
-            # note that the first parameter is really unused
+        tsne_evaluator.calculate_gradient(Y, no_dims, dY, theta)
 
         # Update gains
         for i in xrange(N):
@@ -182,225 +213,19 @@ def run_tsne(X_np, int no_dims, double perplexity, double theta = 0.01, verbose=
 
         # Stop lying about the P-values after a while, and switch momentum
         if iter == stop_lying_iter:
-            if exact:
-                P_np /= 12.0
-            else:
-                for i in xrange(row_P[N]):
-                    val_P[i] /= 12.0
+            tsne_evaluator.multiply_p( 1.0/12.0 )
 
         if iter == mom_switch_iter:
             momentum = final_momentum
 
-        print "."
         if iter%50==0:
-            print iter
+            logf("Iteration: %s, error: %s",
+                 iter,
+                 tsne_evaluator.error(Y, theta)
+                 )
 
-    #     // Print out progress
-    #     if(iter > 0 && (iter % 50 == 0 || iter == max_iter - 1)) {
-    #         end = clock();
-    #         double C = .0;
-    #         if(exact) C = evaluateError(P, Y, N, no_dims);
-    #         else      C = evaluateError(row_P, col_P, val_P, Y, N, no_dims, theta);  // doing approximate computation here!
-    #         if(iter == 0)
-    #             printf("Iteration %d: error is %f\n", iter + 1, C);
-    #         else {
-    #             total_time += (float) (end - start) / CLOCKS_PER_SEC;
-    #             printf("Iteration %d: error is %f (50 iterations in %4.2f seconds)\n", iter, C, (float) (end - start) / CLOCKS_PER_SEC);
-    #         }
-    #     		start = clock();
-    #     }
-    # }
-    # end = clock(); total_time += (float) (end - start) / CLOCKS_PER_SEC;
-
-    if not exact:
-        free(row_P)
-        free(col_P)
-        free(val_P)
-
+    tsne_evaluator.destroy()
     return Y_np
-
-
-
-
-
-TEMP_FOLDER = "/tmp/"
-
-def set_temp_folder(fdr):
-    global TEMP_FOLDER
-    TEMP_FOLDER = fdr
-
-def mmapped_zeros(shape, dtype):
-    """Return a array that is automatically persisted to disk. Useful for
-    machines without a lot of memory or swap.
-
-    The resource is deleted when the array is garbage-collected.
-    """
-    global TEMP_FOLDER
-    # In theory, all this should be equivalent to
-    return np.zeros(shape=shape, dtype=dtype)
-    # but it should magically work when your machine doesn't have memory but does have hard disk.
-    # To see how many memmaps we have active (watch your gc!),
-    # run pmap $PID | grep .mmap
-    (_, filename) = tempfile.mkstemp(suffix='.mmap',
-                                     dir=TEMP_FOLDER,
-                                     )
-    os.unlink(filename)
-    A = np.memmap(filename, shape=shape, dtype=dtype, mode='w+')
-    os.unlink(filename)
-    return A
-
-def my_joint_probabilities(
-        np.ndarray[np.double_t, ndim=2] distances,
-        desired_perplexity,
-        verbose):
-    """Compute joint probabilities p_ij from distances.
-
-    Just like t_sne._joint_probabilities, but this one avoids
-    unnecessary allocations.
-
-    Parameters
-    ----------
-    distances : array, shape (n_samples * (n_samples-1) / 2,)
-        Distances of samples are stored as condensed matrices, i.e.
-        we omit the diagonal and duplicate entries and store everything
-        in a one-dimensional array.
-
-    desired_perplexity : float
-        Desired perplexity of the joint probability distributions.
-
-    verbose : int
-        Verbosity level.
-
-    Returns
-    -------
-    P : array, shape (n_samples * (n_samples-1) / 2,)
-        Condensed joint probability matrix.
-
-    """
-    # Compute conditional probabilities such that they approximately match
-    # the desired perplexity
-
-    # Make a temporary mmapped file, for memory safety
-    conditional_P = _utils._binary_search_perplexity(
-        distances, desired_perplexity, verbose)
-    cdef double[:, ::1] cPview = conditional_P
-
-    # Symmetricise
-    cdef int n_samples = len(conditional_P)
-    cdef int i,j
-    for i in xrange(n_samples):
-        for j in xrange(i+1, n_samples):
-            cPview[i,j] = cPview[i,j] + cPview[j,i]
-            cPview[j,i] = cPview[i,j]
-    sum_P = np.maximum(np.sum(conditional_P), MACHINE_EPSILON)
-
-    # Turn into probabilities
-    npP = squareform(conditional_P)
-    cdef double[::1] P = npP
-    del conditional_P, cPview
-    for i in xrange(len(P)):
-        P[i] = P[i] / sum_P
-        if P[i] < MACHINE_EPSILON:
-            P[i] = MACHINE_EPSILON
-    return npP
-
-
-def my_kl_divergence(
-        params,
-        double [::1] P,
-        double alpha,
-        int n_samples,
-        int n_components):
-    """t-SNE objective function: KL divergence of p_ijs and q_ijs.
-
-    Just like sklearn.manifold.t_sne._kl_divergence, but this version
-    avoids spurious allocations.
-
-    Parameters
-    ----------
-    params : array, shape (n_params,)
-        Unraveled embedding.
-
-    P : array, shape (n_samples * (n_samples-1) / 2,)
-        Condensed joint probability matrix.
-
-    alpha : float
-        Degrees of freedom of the Student's-t distribution.
-
-    n_samples : int
-        Number of samples.
-
-    n_components : int
-        Dimension of the embedded space.
-
-    Returns
-    -------
-    kl_divergence : float
-        Kullback-Leibler divergence of p_ij and q_ij.
-
-    grad : array, shape (n_params,)
-        Unraveled gradient of the Kullback-Leibler divergence with respect to
-        the embedding.
-
-    """
-    cdef double[:,::1] X_embedded = params.reshape(n_samples, n_components)
-
-    # Step 1: Calculate sum(n)
-    cdef double sum_n = 0.0
-    cdef int i,j,k
-    cdef double dist
-    for i in xrange(n_samples):
-        for j in xrange(i+1, n_samples):
-            dist = 0
-            for k in xrange(n_components):
-                dist += ((X_embedded[i,k]-X_embedded[j,k]) *
-                         (X_embedded[i,k]-X_embedded[j,k]))
-            sum_n = sum_n + ((1+dist)/alpha) ** ((alpha+1.0) / -2.0)
-    # now sum_n is correct!
-
-    # Step 2: Calculate Q, which is the Student's t-distribution here.
-    # (Trading off memory use for speed here)
-    # I'm also inlining the calculation for the gradient here.
-    npgrad = np.zeros((n_samples, n_components), dtype='double')
-    cdef double[:,::1] grad = npgrad
-    cdef double kl_divergence = 0.0
-    cdef double Q = 0.0
-    cdef int dim_idx = 0
-    for i in xrange(n_samples):
-        for j in xrange(i+1, n_samples):
-            dim_idx = n_samples*min(i,j) - (min(i,j)*(min(i,j) + 3)/2) + max(i,j) - 1
-            dist = 0
-            for k in xrange(n_components):
-                dist += ((X_embedded[i,k]-X_embedded[j,k]) *
-                         (X_embedded[i,k]-X_embedded[j,k]))
-
-            # What's this Q?
-            Q = ((1+dist)/alpha) ** ((alpha+1.0) / -2.0)
-            Q = max(Q/ (2.0 * sum_n), MACHINE_EPSILON)
-
-            kl_divergence += 2.0 * P[dim_idx] * math.log(P[dim_idx] / Q)
-
-        # Inline: Add j's result to grad[i]
-        for j in xrange(n_samples):
-            if i!=j:
-                # verified in my notebook :S .... but I do hate it!
-                # see "2015-02-06 Make tSNE part use less memory"
-                dim_idx = n_samples*min(i,j) - (min(i,j)*(min(i,j) + 3)/2) + max(i,j) - 1
-                dist = 0
-                for k in xrange(n_components):
-                    dist += ((X_embedded[i,k]-X_embedded[j,k]) *
-                             (X_embedded[i,k]-X_embedded[j,k]))
-                Q = ((1+dist)/alpha) ** ((alpha+1.0) / -2.0)
-                Q = max(Q/ (2.0 * sum_n), MACHINE_EPSILON)
-                for k in xrange(n_components):
-                    grad[i,k] += (
-                        # PQd
-                        (P[dim_idx] - Q) * ((1+dist)/alpha) ** ((alpha+1.0) / -2.0)
-                        # Difference between this point and every other point
-                        * (X_embedded[i,k] - X_embedded[j, k])
-                    ) * (2.0 * (alpha + 1.0) / alpha) # this is c
-
-    return kl_divergence, npgrad.ravel()
 
 
 cpdef tste_grad(npX,
@@ -524,186 +349,169 @@ cpdef tste_grad(npX,
         #         dC[n,i] = (dC[n,i])
     return C, npdC
 
-# def debug_costs(samples, triplets, X_embedded, perplexity, which):
+
+# def snack_embed(triplets,
+#                 distances,
+#                 perplexity=30,
+#                 no_dims=2,
+#                 contrib_cost_triplets=1.0,
+#                 contrib_cost_tsne=1.0,
+#                 alpha=None,
+#                 verbose=True,
+#                 max_iter=300,
+#                 initial_X=None,
+#                 static_points=np.array([]),
+#                 num_threads=None,
+#                 use_log=False,
+#                 each_function=False,
+# ):
+#     """Learn the triplet embedding for the given triplets.
+#
+#     Returns an array with shape (max(triplets)+1, no_dims). The i-th
+#     row in this array corresponds to the no_dims-dimensional
+#     coordinate of the point.
+#
+#     Parameters:
+#
+#     triplets: An Nx3 integer array of object indices. Each row is a
+#               triplet; first column is the 'reference', second column
+#               is the 'near edge', and third column is the 'far edge'.
+#     distances: A square distance matrix for t-SNE.
+#     no_dims:  Number of dimensions in final embedding. High-dimensional
+#               embeddings are much easier to satisfy (lower training
+#               error), but may capture less information.
+#     alpha:    Degrees of freedom in student T kernel. Default is no_dims-1.
+#               Considered "black magic"; roughly, how much of an impact
+#               badly satisfying points have on the gradient calculation.
+#     verbose:  Prints log messages every 10 iterations
+#     initial_X: The initial set of points to use. Normally distributed if unset.
+#     num_threads: Parallelism.
+#     each_function: A function that is called for each gradient update
+#
+#     """
+#     if num_threads is None:
+#         num_threads = openmp.omp_get_num_procs()
+#     openmp.omp_set_num_threads(num_threads)
+#
+#     if alpha is None:
+#         alpha = no_dims-1
+#
+#     cdef unsigned int N = len(distances)
+#     assert -1 not in triplets
+#     if False:
+#         assert 0 in triplets, ("This is not Matlab. Indices should be 0-indexed. "+
+#                                "Remove this assertion if you really want point 0 to "+
+#                                "have no gradient.")
+#
+#     n_triplets = len(triplets)
+#
+#     # Initialize some variables
+#     if initial_X is None:
+#         X = np.random.randn(N, no_dims) * 0.0001
+#     else:
+#         X = initial_X
+#
 #     # tSNE perplexity calculation
-#     P = _joint_probabilities(distances, perplexity, verbose=10)
-#     for i in samples:
-
-#     n = pdist(X_embedded, "sqeuclidean")
-#     n += 1.
-#     n /= alpha
-#     n **= (alpha + 1.0) / -2.0
-#     Q = np.maximum(n / (2.0 * np.sum(n)), MACHINE_EPSILON)
-
-#     # Optimization trick below: np.dot(x, y) is faster than
-#     # np.sum(x * y) because it calls BLAS
-
-#     # Objective: C (Kullback-Leibler divergence of P and Q)
-#     kl_divergence = 2.0 * np.dot(P, np.log(P / Q))
-
-
-def snack_embed(triplets,
-                distances,
-                perplexity=30,
-                no_dims=2,
-                contrib_cost_triplets=1.0,
-                contrib_cost_tsne=1.0,
-                alpha=None,
-                verbose=True,
-                max_iter=300,
-                initial_X=None,
-                static_points=np.array([]),
-                num_threads=None,
-                use_log=False,
-                each_function=False,
-):
-    """Learn the triplet embedding for the given triplets.
-
-    Returns an array with shape (max(triplets)+1, no_dims). The i-th
-    row in this array corresponds to the no_dims-dimensional
-    coordinate of the point.
-
-    Parameters:
-
-    triplets: An Nx3 integer array of object indices. Each row is a
-              triplet; first column is the 'reference', second column
-              is the 'near edge', and third column is the 'far edge'.
-    distances: A square distance matrix for t-SNE.
-    no_dims:  Number of dimensions in final embedding. High-dimensional
-              embeddings are much easier to satisfy (lower training
-              error), but may capture less information.
-    alpha:    Degrees of freedom in student T kernel. Default is no_dims-1.
-              Considered "black magic"; roughly, how much of an impact
-              badly satisfying points have on the gradient calculation.
-    verbose:  Prints log messages every 10 iterations
-    initial_X: The initial set of points to use. Normally distributed if unset.
-    num_threads: Parallelism.
-    each_function: A function that is called for each gradient update
-
-    """
-    if num_threads is None:
-        num_threads = openmp.omp_get_num_procs()
-    openmp.omp_set_num_threads(num_threads)
-
-    if alpha is None:
-        alpha = no_dims-1
-
-    cdef unsigned int N = len(distances)
-    assert -1 not in triplets
-    if False:
-        assert 0 in triplets, ("This is not Matlab. Indices should be 0-indexed. "+
-                               "Remove this assertion if you really want point 0 to "+
-                               "have no gradient.")
-
-    n_triplets = len(triplets)
-
-    # Initialize some variables
-    if initial_X is None:
-        X = np.random.randn(N, no_dims) * 0.0001
-    else:
-        X = initial_X
-
-    # tSNE perplexity calculation
-    P = my_joint_probabilities(distances, perplexity, verbose=10 if verbose else 0)
-
-    # Normalize triplet cost by the number of triplets that we have
-    contrib_cost_triplets = contrib_cost_triplets*(2.0 / float(n_triplets) * float(N))
-
-    cdef double[:,::1] K = mmapped_zeros((N, N), dtype='float64')
-    cdef double[:,::1] Q = mmapped_zeros((N, N), dtype='float64')
-
-    def grad(x):
-        # t-STE
-        C1,dC1 = tste_grad(x.reshape(N, no_dims), N, no_dims, triplets, alpha,
-                           K, Q)
-        dC1 = dC1.ravel()
-
-        # t-SNE
-        C2,dC2 = my_kl_divergence(x, P, alpha, N, no_dims)
-
-        C = contrib_cost_triplets*C1 + contrib_cost_tsne*C2
-        dC = contrib_cost_triplets*dC1 + contrib_cost_tsne*dC2
-
-        # Calculate and report # of triplet violations
-        X=x.reshape(N, no_dims)
-        sum_X = np.sum(X**2, axis=1)
-        no_viol = -1
-        if verbose:
-            #D = -2 * (X.dot(X.T)) + sum_X[np.newaxis,:] + sum_X[:,np.newaxis]
-            ## ^ D = squared Euclidean distance?
-            #no_viol = np.sum(D[triplets[:,0],triplets[:,1]] > D[triplets[:,0],triplets[:,2]]);
-            print 'Cost is ',C #,', number of constraints: ', (float(no_viol) / n_triplets)
-
-        if each_function:
-            each_function(x.copy().reshape(N,no_dims),
-                          linalg.norm(dC1),
-                          linalg.norm(dC2),
-                          contrib_cost_triplets*linalg.norm(dC1),
-                          contrib_cost_tsne*linalg.norm(dC2),
-                          no_viol,
-                          C,
-            )
-
-        return C, dC
-
-    # Early exaggeration
-    EARLY_EXAGGERATION = 4.0
-    P *= EARLY_EXAGGERATION
-    params, iter, it = _gradient_descent(
-        grad,
-        X.ravel(),
-        it=0,
-        n_iter=50,
-        n_iter_without_progress=300,
-        momentum=0.5,
-        learning_rate = 1.0, # Chosen by the caller!
-        min_gain = 1e-5,
-        min_grad_norm = 1e-7, # Abort when less
-        min_error_diff = 1e-7,
-        verbose=5 if verbose else 0,
-    )
-    # Second stage: More momentum
-    params, iter, it = _gradient_descent(
-        grad,
-        params,
-        it=it+1,
-        # n_iter=max_iter,
-        n_iter=100,
-        n_iter_without_progress=300,
-        momentum=0.8,
-        learning_rate = 1.0, #(float(2.0) / n_triplets * N),
-        min_gain = 1e-5,
-        min_grad_norm = 1e-7, # Abort when less
-        min_error_diff = 1e-7,
-        verbose=5 if verbose else 0,
-    )
-    # Undo early exaggeration
-    P /= EARLY_EXAGGERATION
-    params, iter, it = _gradient_descent(
-        grad,
-        params,
-        it=it+1,
-        n_iter=max_iter,
-        n_iter_without_progress=300,
-        momentum=0.8,
-        learning_rate = 1.0, #(float(2.0) / n_triplets * N),
-        min_gain = 1e-5,
-        min_grad_norm = 1e-7, # Abort when less
-        min_error_diff = 1e-7,
-        verbose=5 if verbose else 0,
-    )
-    # params, iter, it = _gradient_descent(
-    #     work,
-    #     X.ravel(),
-    #     it=it+1,
-    #     n_iter=max_iter,
-    #     n_iter_without_progress=300,
-    #     momentum=0.5,
-    #     learning_rate = 1.0, #(float(2.0) / n_triplets * N),
-    #     min_gain = 1e-5,
-    #     min_grad_norm = 1e-7, # Abort when less
-    #     min_error_diff = 1e-7,
-    #     verbose=5,
-    # )
-
-    return params.reshape(N, no_dims)
+#     P = my_joint_probabilities(distances, perplexity, verbose=10 if verbose else 0)
+#
+#     # Normalize triplet cost by the number of triplets that we have
+#     contrib_cost_triplets = contrib_cost_triplets*(2.0 / float(n_triplets) * float(N))
+#
+#     cdef double[:,::1] K = mmapped_zeros((N, N), dtype='float64')
+#     cdef double[:,::1] Q = mmapped_zeros((N, N), dtype='float64')
+#
+#     def grad(x):
+#         # t-STE
+#         C1,dC1 = tste_grad(x.reshape(N, no_dims), N, no_dims, triplets, alpha,
+#                            K, Q)
+#         dC1 = dC1.ravel()
+#
+#         # t-SNE
+#         C2,dC2 = my_kl_divergence(x, P, alpha, N, no_dims)
+#
+#         C = contrib_cost_triplets*C1 + contrib_cost_tsne*C2
+#         dC = contrib_cost_triplets*dC1 + contrib_cost_tsne*dC2
+#
+#         # Calculate and report # of triplet violations
+#         X=x.reshape(N, no_dims)
+#         sum_X = np.sum(X**2, axis=1)
+#         no_viol = -1
+#         if verbose:
+#             #D = -2 * (X.dot(X.T)) + sum_X[np.newaxis,:] + sum_X[:,np.newaxis]
+#             ## ^ D = squared Euclidean distance?
+#             #no_viol = np.sum(D[triplets[:,0],triplets[:,1]] > D[triplets[:,0],triplets[:,2]]);
+#             print 'Cost is ',C #,', number of constraints: ', (float(no_viol) / n_triplets)
+#
+#         if each_function:
+#             each_function(x.copy().reshape(N,no_dims),
+#                           linalg.norm(dC1),
+#                           linalg.norm(dC2),
+#                           contrib_cost_triplets*linalg.norm(dC1),
+#                           contrib_cost_tsne*linalg.norm(dC2),
+#                           no_viol,
+#                           C,
+#             )
+#
+#         return C, dC
+#
+#     # Early exaggeration
+#     EARLY_EXAGGERATION = 4.0
+#     P *= EARLY_EXAGGERATION
+#     params, iter, it = _gradient_descent(
+#         grad,
+#         X.ravel(),
+#         it=0,
+#         n_iter=50,
+#         n_iter_without_progress=300,
+#         momentum=0.5,
+#         learning_rate = 1.0, # Chosen by the caller!
+#         min_gain = 1e-5,
+#         min_grad_norm = 1e-7, # Abort when less
+#         min_error_diff = 1e-7,
+#         verbose=5 if verbose else 0,
+#     )
+#     # Second stage: More momentum
+#     params, iter, it = _gradient_descent(
+#         grad,
+#         params,
+#         it=it+1,
+#         # n_iter=max_iter,
+#         n_iter=100,
+#         n_iter_without_progress=300,
+#         momentum=0.8,
+#         learning_rate = 1.0, #(float(2.0) / n_triplets * N),
+#         min_gain = 1e-5,
+#         min_grad_norm = 1e-7, # Abort when less
+#         min_error_diff = 1e-7,
+#         verbose=5 if verbose else 0,
+#     )
+#     # Undo early exaggeration
+#     P /= EARLY_EXAGGERATION
+#     params, iter, it = _gradient_descent(
+#         grad,
+#         params,
+#         it=it+1,
+#         n_iter=max_iter,
+#         n_iter_without_progress=300,
+#         momentum=0.8,
+#         learning_rate = 1.0, #(float(2.0) / n_triplets * N),
+#         min_gain = 1e-5,
+#         min_grad_norm = 1e-7, # Abort when less
+#         min_error_diff = 1e-7,
+#         verbose=5 if verbose else 0,
+#     )
+#     # params, iter, it = _gradient_descent(
+#     #     work,
+#     #     X.ravel(),
+#     #     it=it+1,
+#     #     n_iter=max_iter,
+#     #     n_iter_without_progress=300,
+#     #     momentum=0.5,
+#     #     learning_rate = 1.0, #(float(2.0) / n_triplets * N),
+#     #     min_gain = 1e-5,
+#     #     min_grad_norm = 1e-7, # Abort when less
+#     #     min_error_diff = 1e-7,
+#     #     verbose=5,
+#     # )
+#
+#     return params.reshape(N, no_dims)
