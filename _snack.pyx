@@ -137,23 +137,40 @@ cdef class Exact_BHTSNE(object):
         cdef double[:,::1] P = self.P_np
         return self.tsne.evaluateError(&P[0,0], &Y[0,0], Y.shape[0], Y.shape[1])
 
+def run_tsne(X_np,
+             long[:,::1] triplets,
+             int no_dims,
+             double perplexity = 30.0,
+             double theta = 0.01,
+             double contrib_cost_triplets = 1.0,
+             double contrib_cost_tsne = 1.0,
+             each_fun = None,
+             alpha = None,
+             int max_iters = 1000,
+             int stop_lying_iter = 250,
+             int momentum_switch_iter = 250,
+             double momentum = 0.5,
+             double final_momentum = 0.8,
+             double eta = 200.0,
+             initial_Y = None,
 
-
-
-def run_tsne(X_np, int no_dims, double perplexity, double theta = 0.01, verbose=True):
+             verbose=True,
+):
     def logf(s, *args):
         if verbose: print s%args
 
-    cdef int max_iter = 1000, stop_lying_iter = 250, mom_switch_iter = 250;
-    cdef double momentum = .5, final_momentum = .8;
-    cdef double eta = 200.0;
+    alpha = alpha or no_dims - 1
 
     cdef int N = X_np.shape[0], D = X_np.shape[1]
     cdef int n, m, i, j, k
 
+    dY_tSNE_np = np.zeros((N, no_dims), 'double')
+    dY_tSTE_np = np.zeros((N, no_dims), 'double')
     dY_np = np.zeros((N, no_dims), 'double')
     uY_np = np.zeros((N, no_dims), 'double')
     gains_np = np.zeros((N, no_dims), 'double') + 1.0
+    cdef double[:, ::1] dY_tSNE = dY_tSNE_np
+    cdef double[:, ::1] dY_tSTE = dY_tSTE_np
     cdef double[:, ::1] dY = dY_np
     cdef double[:, ::1] uY = uY_np
     cdef double[:, ::1] gains = gains_np
@@ -183,7 +200,7 @@ def run_tsne(X_np, int no_dims, double perplexity, double theta = 0.01, verbose=
     tsne_evaluator.multiply_p(12)
 
     # Initialize solution (randomly)
-    Y_np = np.random.randn(N, no_dims) * 0.0001
+    Y_np = initial_Y if initial_Y is not None else np.random.randn(N, no_dims) * 0.0001
     cdef double[:, ::1] Y = Y_np
 
     logf("Learning embedding...")
@@ -192,8 +209,19 @@ def run_tsne(X_np, int no_dims, double perplexity, double theta = 0.01, verbose=
     # else:
     #     logf("Sparsity = %f! Learning embedding...", row_P[N] / (N*N))
 
-    for iter in xrange(max_iter):
-        tsne_evaluator.calculate_gradient(Y, no_dims, dY, theta)
+    for iter in xrange(max_iters):
+        if contrib_cost_tsne:
+            tsne_evaluator.calculate_gradient(Y, no_dims, dY_tSNE, theta)
+            C_tSNE = tsne_evaluator.error(Y, theta)
+
+        if contrib_cost_triplets:
+            C_tSTE, dY_tSTE = tste_grad(Y, N, no_dims, triplets, alpha)
+
+        # Set gradient
+        for i in xrange(N):
+            for j in xrange(no_dims):
+                dY[i,j] = (contrib_cost_triplets * dY_tSTE[i,j] +
+                           contrib_cost_tsne * dY_tSNE[i,j])
 
         # Update gains
         for i in xrange(N):
@@ -215,14 +243,15 @@ def run_tsne(X_np, int no_dims, double perplexity, double theta = 0.01, verbose=
         if iter == stop_lying_iter:
             tsne_evaluator.multiply_p( 1.0/12.0 )
 
-        if iter == mom_switch_iter:
+        if iter == momentum_switch_iter:
             momentum = final_momentum
 
         if iter%50==0:
-            logf("Iteration: %s, error: %s",
-                 iter,
-                 tsne_evaluator.error(Y, theta)
-                 )
+            logf("Iter %s", iter)
+            # logf("Iteration: %s, error: %s",
+            #      iter,
+            #      tsne_evaluator.error(Y, theta)
+            #      )
 
     tsne_evaluator.destroy()
     return Y_np
@@ -233,8 +262,6 @@ cpdef tste_grad(npX,
                 int no_dims,
                 long [:, ::1] triplets,
                 double alpha,
-                double[:,::1] K,
-                double[:,::1] Q,
 ):
     """Compute the cost function and gradient update of t-STE.
 
@@ -264,6 +291,8 @@ cpdef tste_grad(npX,
     cdef double C = 0
     cdef double A_to_B, A_to_C, const
     cdef double[::1] sum_X = np.zeros((N,), dtype='float64')
+    cdef double[:,::1] K = np.zeros((N,N), dtype='double')
+    cdef double[:,::1] Q = np.zeros((N,N), dtype='double')
     # Don't need to reinitialize K, Q because they're initialized below in the loop.
     assert K.shape[0] == N; assert K.shape[1] == N
     assert Q.shape[0] == N; assert Q.shape[1] == N
