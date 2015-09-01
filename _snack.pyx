@@ -209,6 +209,8 @@ def run_tsne(X_np,
     # else:
     #     logf("Sparsity = %f! Learning embedding...", row_P[N] / (N*N))
 
+    C_tSNE = -1
+    C_tSTE = -1
     for iter in xrange(max_iters):
         if contrib_cost_tsne:
             tsne_evaluator.calculate_gradient(Y, no_dims, dY_tSNE, theta)
@@ -234,8 +236,10 @@ def run_tsne(X_np,
         for i in xrange(N):
             for j in xrange(no_dims):
                 uY[i,j] = momentum * uY[i,j] - eta * gains[i,j] * dY[i,j]
+                # with momentum:
                 Y[i,j] = Y[i,j] + uY[i,j]
-                # Y[i,j] = Y[i,j] + dY[i,j]
+                # turn off momentum for a moment:
+                #Y[i,j] = Y[i,j] - dY[i,j]
 
         Y_np -= np.mean(Y_np, 0)
 
@@ -252,6 +256,9 @@ def run_tsne(X_np,
             #      iter,
             #      tsne_evaluator.error(Y, theta)
             #      )
+
+        if each_fun:
+            each_fun(iter, Y_np, momentum, C_tSTE, C_tSNE)
 
     tsne_evaluator.destroy()
     return Y_np
@@ -301,6 +308,14 @@ cpdef tste_grad(npX,
     cdef double[:, :, ::1] dC_part = np.zeros((no_triplets, no_dims, 3), 'float64')
 
     # We don't perform L2 regularization, unlike original tSTE
+    # (wait, we should do this if we use momentum!)
+
+    # # L2 Regularization cost
+    # cdef double lamb = 1.0 # (No regularization!)
+    # for i in xrange(N):
+    #     for j in xrange(no_dims):
+    #         C += X[i,j]*X[i,j]
+    # C *= lamb
 
     # Compute student-T kernel for each point
     # i,j range over points; k ranges over dims
@@ -371,11 +386,11 @@ cpdef tste_grad(npX,
                 dC[triplets_A[t], i] += dC_part[t, i, 0]
                 dC[triplets_B[t], i] += dC_part[t, i, 1]
                 dC[triplets_C[t], i] += dC_part[t, i, 2]
-        # I'm not performing regularization here!
+        # # L2 regularization
         # for n in xrange(N):
         #     for i in xrange(no_dims):
         #         # The 2*lamb*npx is for regularization: derivative of L2 norm
-        #         dC[n,i] = (dC[n,i])
+        #         dC[n,i] = dC[n,i] + 2*lamb*X[n,i]
     return C, npdC
 
 
