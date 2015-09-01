@@ -26,17 +26,21 @@ if USE_SSE_AVX:
     compile_args.append("-march=native")
 
 if platform.system() == "Darwin":
-    BLAS_INCLUDE = "/usr/local/opt/openblas/include"
-    BLAS_LIB = "/usr/local/opt/openblas/lib"
+    # To use OpenBLAS:
+    #BLAS_LIB = "/usr/local/opt/openblas/include"
+    #BLAS_LIB = "/usr/local/opt/openblas/lib"
+    # To use Apple's Accelerate framework for BLAS:
+    BLAS_INCLUDE = "/System/Library/Frameworks/Accelerate.framework/Frameworks/vecLib.framework/Headers"
+    BLAS_LIB = "/System/Library/Frameworks/Accelerate.framework/Frameworks/vecLib.framework"
     GCC_VERSION = "/usr/local/bin/gcc-5"
     print "On OSX, ensure you have the following dependencies:"
     print "- You must use a gcc version from homebrew that supports openmp"
-    print "- You must install OpenBLAS from homebrew"
-    if not os.path.exists(BLAS_INCLUDE+"/cblas.h"):
-        print "Please install OpenBLAS with:"
-        print "    $ brew install openblas"
-        print "or edit setup.py."
-        sys.exit(1)
+    #print "- You must install OpenBLAS from homebrew"
+    #if not os.path.exists(BLAS_INCLUDE+"/cblas.h"):
+    #    print "Please install OpenBLAS with:"
+    #    print "    $ brew install openblas"
+    #    print "or edit setup.py."
+    #    sys.exit(1)
     if not os.path.exists(GCC_VERSION):
         print "Please install GCC from homebrew wth:"
         print "    $ brew install gcc"
