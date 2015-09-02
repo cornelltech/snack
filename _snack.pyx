@@ -19,7 +19,6 @@ cimport cython.parallel
 cimport openmp
 
 import numpy as np
-import tempfile
 import os
 import gc
 
@@ -153,9 +152,32 @@ def run_tsne(X_np,
              double final_momentum = 0.8,
              double eta = 200.0,
              initial_Y = None,
-
              verbose=True,
 ):
+    """Learn the triplet embedding for the given triplets.
+
+    Returns an array with shape (max(triplets)+1, no_dims). The i-th
+    row in this array corresponds to the no_dims-dimensional
+    coordinate of the point.
+
+    Parameters:
+
+    triplets: An Nx3 integer array of object indices. Each row is a
+              triplet; first column is the 'reference', second column
+              is the 'near edge', and third column is the 'far edge'.
+    distances: A square distance matrix for t-SNE.
+    no_dims:  Number of dimensions in final embedding. High-dimensional
+              embeddings are much easier to satisfy (lower training
+              error), but may capture less information.
+    alpha:    Degrees of freedom in student T kernel. Default is no_dims-1.
+              Considered "black magic"; roughly, how much of an impact
+              badly satisfying points have on the gradient calculation.
+    verbose:  Prints log messages every 10 iterations
+    initial_X: The initial set of points to use. Normally distributed if unset.
+    num_threads: Parallelism.
+    each_function: A function that is called for each gradient update
+
+    """
     def logf(s, *args):
         if verbose: print s%args
 
@@ -392,170 +414,3 @@ cpdef tste_grad(npX,
         #         # The 2*lamb*npx is for regularization: derivative of L2 norm
         #         dC[n,i] = dC[n,i] + 2*lamb*X[n,i]
     return C, npdC
-
-
-# def snack_embed(triplets,
-#                 distances,
-#                 perplexity=30,
-#                 no_dims=2,
-#                 contrib_cost_triplets=1.0,
-#                 contrib_cost_tsne=1.0,
-#                 alpha=None,
-#                 verbose=True,
-#                 max_iter=300,
-#                 initial_X=None,
-#                 static_points=np.array([]),
-#                 num_threads=None,
-#                 use_log=False,
-#                 each_function=False,
-# ):
-#     """Learn the triplet embedding for the given triplets.
-#
-#     Returns an array with shape (max(triplets)+1, no_dims). The i-th
-#     row in this array corresponds to the no_dims-dimensional
-#     coordinate of the point.
-#
-#     Parameters:
-#
-#     triplets: An Nx3 integer array of object indices. Each row is a
-#               triplet; first column is the 'reference', second column
-#               is the 'near edge', and third column is the 'far edge'.
-#     distances: A square distance matrix for t-SNE.
-#     no_dims:  Number of dimensions in final embedding. High-dimensional
-#               embeddings are much easier to satisfy (lower training
-#               error), but may capture less information.
-#     alpha:    Degrees of freedom in student T kernel. Default is no_dims-1.
-#               Considered "black magic"; roughly, how much of an impact
-#               badly satisfying points have on the gradient calculation.
-#     verbose:  Prints log messages every 10 iterations
-#     initial_X: The initial set of points to use. Normally distributed if unset.
-#     num_threads: Parallelism.
-#     each_function: A function that is called for each gradient update
-#
-#     """
-#     if num_threads is None:
-#         num_threads = openmp.omp_get_num_procs()
-#     openmp.omp_set_num_threads(num_threads)
-#
-#     if alpha is None:
-#         alpha = no_dims-1
-#
-#     cdef unsigned int N = len(distances)
-#     assert -1 not in triplets
-#     if False:
-#         assert 0 in triplets, ("This is not Matlab. Indices should be 0-indexed. "+
-#                                "Remove this assertion if you really want point 0 to "+
-#                                "have no gradient.")
-#
-#     n_triplets = len(triplets)
-#
-#     # Initialize some variables
-#     if initial_X is None:
-#         X = np.random.randn(N, no_dims) * 0.0001
-#     else:
-#         X = initial_X
-#
-#     # tSNE perplexity calculation
-#     P = my_joint_probabilities(distances, perplexity, verbose=10 if verbose else 0)
-#
-#     # Normalize triplet cost by the number of triplets that we have
-#     contrib_cost_triplets = contrib_cost_triplets*(2.0 / float(n_triplets) * float(N))
-#
-#     cdef double[:,::1] K = mmapped_zeros((N, N), dtype='float64')
-#     cdef double[:,::1] Q = mmapped_zeros((N, N), dtype='float64')
-#
-#     def grad(x):
-#         # t-STE
-#         C1,dC1 = tste_grad(x.reshape(N, no_dims), N, no_dims, triplets, alpha,
-#                            K, Q)
-#         dC1 = dC1.ravel()
-#
-#         # t-SNE
-#         C2,dC2 = my_kl_divergence(x, P, alpha, N, no_dims)
-#
-#         C = contrib_cost_triplets*C1 + contrib_cost_tsne*C2
-#         dC = contrib_cost_triplets*dC1 + contrib_cost_tsne*dC2
-#
-#         # Calculate and report # of triplet violations
-#         X=x.reshape(N, no_dims)
-#         sum_X = np.sum(X**2, axis=1)
-#         no_viol = -1
-#         if verbose:
-#             #D = -2 * (X.dot(X.T)) + sum_X[np.newaxis,:] + sum_X[:,np.newaxis]
-#             ## ^ D = squared Euclidean distance?
-#             #no_viol = np.sum(D[triplets[:,0],triplets[:,1]] > D[triplets[:,0],triplets[:,2]]);
-#             print 'Cost is ',C #,', number of constraints: ', (float(no_viol) / n_triplets)
-#
-#         if each_function:
-#             each_function(x.copy().reshape(N,no_dims),
-#                           linalg.norm(dC1),
-#                           linalg.norm(dC2),
-#                           contrib_cost_triplets*linalg.norm(dC1),
-#                           contrib_cost_tsne*linalg.norm(dC2),
-#                           no_viol,
-#                           C,
-#             )
-#
-#         return C, dC
-#
-#     # Early exaggeration
-#     EARLY_EXAGGERATION = 4.0
-#     P *= EARLY_EXAGGERATION
-#     params, iter, it = _gradient_descent(
-#         grad,
-#         X.ravel(),
-#         it=0,
-#         n_iter=50,
-#         n_iter_without_progress=300,
-#         momentum=0.5,
-#         learning_rate = 1.0, # Chosen by the caller!
-#         min_gain = 1e-5,
-#         min_grad_norm = 1e-7, # Abort when less
-#         min_error_diff = 1e-7,
-#         verbose=5 if verbose else 0,
-#     )
-#     # Second stage: More momentum
-#     params, iter, it = _gradient_descent(
-#         grad,
-#         params,
-#         it=it+1,
-#         # n_iter=max_iter,
-#         n_iter=100,
-#         n_iter_without_progress=300,
-#         momentum=0.8,
-#         learning_rate = 1.0, #(float(2.0) / n_triplets * N),
-#         min_gain = 1e-5,
-#         min_grad_norm = 1e-7, # Abort when less
-#         min_error_diff = 1e-7,
-#         verbose=5 if verbose else 0,
-#     )
-#     # Undo early exaggeration
-#     P /= EARLY_EXAGGERATION
-#     params, iter, it = _gradient_descent(
-#         grad,
-#         params,
-#         it=it+1,
-#         n_iter=max_iter,
-#         n_iter_without_progress=300,
-#         momentum=0.8,
-#         learning_rate = 1.0, #(float(2.0) / n_triplets * N),
-#         min_gain = 1e-5,
-#         min_grad_norm = 1e-7, # Abort when less
-#         min_error_diff = 1e-7,
-#         verbose=5 if verbose else 0,
-#     )
-#     # params, iter, it = _gradient_descent(
-#     #     work,
-#     #     X.ravel(),
-#     #     it=it+1,
-#     #     n_iter=max_iter,
-#     #     n_iter_without_progress=300,
-#     #     momentum=0.5,
-#     #     learning_rate = 1.0, #(float(2.0) / n_triplets * N),
-#     #     min_gain = 1e-5,
-#     #     min_grad_norm = 1e-7, # Abort when less
-#     #     min_error_diff = 1e-7,
-#     #     verbose=5,
-#     # )
-#
-#     return params.reshape(N, no_dims)
