@@ -236,10 +236,14 @@ def run_tsne(X_np,
     for iter in xrange(max_iters):
         if contrib_cost_tsne:
             tsne_evaluator.calculate_gradient(Y, no_dims, dY_tSNE, theta)
-            C_tSNE = tsne_evaluator.error(Y, theta)
+            C_tSNE = lambda: tsne_evaluator.error(Y, theta)
+            # calculating the error here is surprisingly expensive!!
+            # so we wrap it in a thunk, just in case...
 
         if contrib_cost_triplets:
-            C_tSTE, dY_tSTE = tste_grad(Y, N, no_dims, triplets, alpha)
+            C_tSTE_val, dY_tSTE = tste_grad(Y, N, no_dims, triplets, alpha)
+            C_tSTE = lambda: C_tSTE_val
+            # thunk, for symmetricity with C_tSNE
 
         # Set gradient
         for i in xrange(N):
