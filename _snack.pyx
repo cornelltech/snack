@@ -318,18 +318,14 @@ cpdef tste_grad(npX,
     cdef long[:] triplets_A = triplets[:,0]
     cdef long[:] triplets_B = triplets[:,1]
     cdef long[:] triplets_C = triplets[:,2]
-    cdef int i,t,j,k
+    cdef int i,t,j,k,d
     cdef double[:, ::1] X = npX
     cdef unsigned int no_triplets = len(triplets)
     cdef double P = 0
     cdef double C = 0
     cdef double A_to_B, A_to_C, const
     cdef double[::1] sum_X = np.zeros((N,), dtype='float64')
-    cdef double[:,::1] K = np.zeros((N,N), dtype='double')
-    cdef double[:,::1] Q = np.zeros((N,N), dtype='double')
-    # Don't need to reinitialize K, Q because they're initialized below in the loop.
-    assert K.shape[0] == N; assert K.shape[1] == N
-    assert Q.shape[0] == N; assert Q.shape[1] == N
+    cdef double Qij, Qik, Kij, Kik
     npdC = np.zeros((N, no_dims), 'float64')
     cdef double[:, ::1] dC = npdC
     cdef double[:, :, ::1] dC_part = np.zeros((no_triplets, no_dims, 3), 'float64')
@@ -352,28 +348,36 @@ cpdef tste_grad(npX,
             for k in xrange(no_dims):
                 # Squared norm
                 sum_X[i] += X[i,k]*X[i,k]
-        for i in cython.parallel.prange(N):
-            for j in xrange(N):
-                K[i,j] = sum_X[i] + sum_X[j]
-                for k in xrange(no_dims):
-                    K[i,j] += -2 * X[i,k]*X[j,k]
-                Q[i,j] = (1 + K[i,j] / alpha) ** -1
-                K[i,j] = (1 + K[i,j] / alpha) ** ((alpha+1)/-2)
-                # Now, K[i,j] = ((sqdist(i,j)/alpha + 1)) ** (-0.5*(alpha+1)),
-                # which is exactly the numerator of p_{i,j} in the lower right of
-                # t-STE paper page 3.
-                # The proof follows because sqdist(a,b) = (a-b)(a-b) = a^2+b^2-2ab
-
-                # (Note however that we're flipping the long and short
-                # edge, since this should be unsatisfied)
 
         # Compute probability (or log-prob) for each triplet Note that
         # each of these probabilities are FLIPPED; ie. this is the
         # probability that the triplet (a,b,c) is VIOLATED
         for t in cython.parallel.prange(no_triplets):
-            P = K[triplets_A[t], triplets_C[t]] / (
-                K[triplets_A[t],triplets_B[t]] +
-                K[triplets_A[t],triplets_C[t]])
+            i = triplets_A[t]
+            j = triplets_B[t]
+            k = triplets_C[t]
+            # Compute short arm distance
+            Kij = sum_X[i] + sum_X[j]
+            for d in xrange(no_dims):
+                Kij += -2 * X[i,d]*X[j,d]
+            Qij = (1 + Kij / alpha) ** -1
+            Kij = (1 + Kij / alpha) ** ((alpha+1)/-2)
+            # Compute long arm distance
+            Kik = sum_X[i] + sum_X[k]
+            for d in xrange(no_dims):
+                Kik += -2 * X[i,d]*X[k,d]
+            Qik = (1 + Kik / alpha) ** -1
+            Kik = (1 + Kik / alpha) ** ((alpha+1)/-2)
+
+            #Kik *= 0.5
+
+            # Now, Kij = ((sqdist(i,j)/alpha + 1)) ** (-0.5*(alpha+1)),
+            # which is exactly the numerator of p_{i,j} in the lower right of
+            # t-STE paper page 3.
+            # The proof follows because sqdist(a,b) = (a-b)(a-b) = a^2+b^2-2ab
+            # (Note however that we're flipping the long and short
+            # edge, since this should be unsatisfied)
+            P = Kik / (Kij + Kik)
             # This is a mirror image of the equation in the
             # lower-right of page 3 of the t-STE paper. Note that this
             # works because K is some reciprocal of the distance, so
@@ -382,23 +386,21 @@ cpdef tste_grad(npX,
             # The probability that triplet (a,b,c) is UNSATISFIED.
             # (We want to MINIMIZE C)
 
-            for i in xrange(no_dims):
-                # For i = each dimension to use:
+            for d in xrange(no_dims):
+                # For d = each dimension to use:
                 # Calculate the gradient of *this triplet* on its points.
                 const = (alpha+1) / alpha
-                A_to_B = ((1 - P) *
-                          Q[triplets_A[t],triplets_B[t]] *
-                          (X[triplets_A[t], i] - X[triplets_B[t], i]))
-                A_to_C = ((1 - P) *
-                          Q[triplets_A[t],triplets_C[t]] *
-                          (X[triplets_A[t], i] - X[triplets_C[t], i]))
+                A_to_B = ((1 - P) * Qij *
+                          (X[triplets_A[t], d] - X[triplets_B[t], d]))
+                A_to_C = ((1 - P) * Qik *
+                          (X[triplets_A[t], d] - X[triplets_C[t], d]))
 
                 # Problem: Since this is a parallel for loop, we can't
                 # accumulate everything at once. Race conditions.
                 # So I calculate it once here:
-                dC_part[t, i, 0] = const * P * (A_to_B - A_to_C)
-                dC_part[t, i, 1] = const * P * (-A_to_B)
-                dC_part[t, i, 2] = const * P * (A_to_C)
+                dC_part[t, d, 0] = const * P * (A_to_B - A_to_C)
+                dC_part[t, d, 1] = const * P * (-A_to_B)
+                dC_part[t, d, 2] = const * P * (A_to_C)
 
                 # This is like 'use_log=False', which doesn't make
                 # sense in this inverted "minimize number of
