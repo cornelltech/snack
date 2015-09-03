@@ -138,7 +138,7 @@ cdef class Exact_BHTSNE(object):
 
 def run_tsne(X_np,
              long[:,::1] triplets,
-             int no_dims,
+             int no_dims = 2,
              double perplexity = 30.0,
              double theta = 0.01,
              double contrib_cost_triplets = 1.0,
@@ -146,13 +146,15 @@ def run_tsne(X_np,
              each_fun = None,
              alpha = None,
              int max_iters = 1000,
-             int stop_lying_iter = 250,
              int momentum_switch_iter = 250,
+             early_exaggeration = 12,
+             stop_lying_iter = 250,
              double momentum = 0.5,
              double final_momentum = 0.8,
-             double eta = 200.0,
+             double learning_rate = 1.0,
              initial_Y = None,
-             verbose=True,
+             verbose = True,
+             num_threads = None,
 ):
     """Learn the triplet embedding for the given triplets.
 
@@ -165,6 +167,7 @@ def run_tsne(X_np,
     triplets: An Nx3 integer array of object indices. Each row is a
               triplet; first column is the 'reference', second column
               is the 'near edge', and third column is the 'far edge'.
+              (MUST BE 0-indexed!!)
     distances: A square distance matrix for t-SNE.
     no_dims:  Number of dimensions in final embedding. High-dimensional
               embeddings are much easier to satisfy (lower training
