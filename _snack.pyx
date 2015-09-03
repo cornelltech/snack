@@ -184,58 +184,56 @@ def run_tsne(X_np,
     def logf(s, *args):
         if verbose: print s%args
 
-    alpha = alpha or no_dims - 1
+    # Set number of threads
+    if num_threads is None:
+        num_threads = openmp.omp_get_num_procs()
+    openmp.omp_set_num_threads(num_threads)
 
+
+    # Set up variables
     cdef int N = X_np.shape[0], D = X_np.shape[1]
     cdef int n, m, i, j, k
-
     dY_tSNE_np = np.zeros((N, no_dims), 'double')
     dY_tSTE_np = np.zeros((N, no_dims), 'double')
     dY_np = np.zeros((N, no_dims), 'double')
     uY_np = np.zeros((N, no_dims), 'double')
     gains_np = np.zeros((N, no_dims), 'double') + 1.0
-    cdef double[:, ::1] dY_tSNE = dY_tSNE_np
-    cdef double[:, ::1] dY_tSTE = dY_tSTE_np
-    cdef double[:, ::1] dY = dY_np
-    cdef double[:, ::1] uY = uY_np
-    cdef double[:, ::1] gains = gains_np
-
-    # We modify this in-place
+    Y_np = initial_Y if initial_Y is not None else np.random.randn(N, no_dims) * 0.0001
+    cdef double[:, ::1] dY_tSNE = dY_tSNE_np # Save gradient wrt. tSNE
+    cdef double[:, ::1] dY_tSTE = dY_tSTE_np # Save gradient wrt. tSTE (triplets)
+    cdef double[:, ::1] dY = dY_np           # Combined gradient (instantaneous)
+    cdef double[:, ::1] uY = uY_np           # Velocity (just the accumulated gradient with momentum)
+    cdef double[:, ::1] gains = gains_np     # Momentum hack to quickly stop points going in the wrong direction
+    cdef double[:, ::1] Y = Y_np             # FINAL SOLUTION
+    alpha = alpha or no_dims - 1             # Degrees of freedom in Student-T kernel
+    exact = (theta == 0)
+    tsne_evaluator = Exact_BHTSNE() if exact else Inexact_BHTSNE()
+    # Set up X (standardization)
     X_np = X_np.copy()
     cdef double[:, ::1] X = X_np
     X_np -= np.mean(X_np, 0)
     X_np /= np.max(np.abs(X_np))
+    # Normalize triplet cost by the number of triplets that we have
+    contrib_cost_triplets = contrib_cost_triplets*(2.0 / float(len(triplets)) * float(N))
 
+    # Warnings
+    assert -1 not in triplets
     if N-1 < 3 * perplexity:
         raise ValueError("Perplexity too large for the number of data points!")
 
     logf("Using no_dims = %d, perplexity = %f, and theta = %f", no_dims, perplexity, theta)
-
-    exact = (theta == 0)
-
-    if exact:
-        tsne_evaluator = Exact_BHTSNE()
-    else:
-        tsne_evaluator = Inexact_BHTSNE()
-
     logf("Computing input similarities...")
     tsne_evaluator.calculate_perplexity(X, perplexity)
 
     # Lie about the P-values
-    tsne_evaluator.multiply_p(12)
-
-    # Initialize solution (randomly)
-    Y_np = initial_Y if initial_Y is not None else np.random.randn(N, no_dims) * 0.0001
-    cdef double[:, ::1] Y = Y_np
+    # (this will be undone later)
+    tsne_evaluator.multiply_p(early_exaggeration)
 
     logf("Learning embedding...")
-    # if exact:
-    #     logf("Learning embedding...")
-    # else:
-    #     logf("Sparsity = %f! Learning embedding...", row_P[N] / (N*N))
 
-    C_tSNE = -1
-    C_tSTE = -1
+    # Gradient descent!!
+    C_tSNE = lambda: -1
+    C_tSTE = lambda: -1
     for iter in xrange(max_iters):
         if contrib_cost_tsne:
             tsne_evaluator.calculate_gradient(Y, no_dims, dY_tSNE, theta)
@@ -244,7 +242,10 @@ def run_tsne(X_np,
             # so we wrap it in a thunk, just in case...
 
         if contrib_cost_triplets:
+            import time
+            begin = time.time()
             C_tSTE_val, dY_tSTE = tste_grad(Y, N, no_dims, triplets, alpha)
+            print "Triplet iter time:", time.time() - begin
             C_tSTE = lambda: C_tSTE_val
             # thunk, for symmetricity with C_tSNE
 
@@ -264,12 +265,13 @@ def run_tsne(X_np,
         # Perform gradient update with momentum and gains
         for i in xrange(N):
             for j in xrange(no_dims):
-                uY[i,j] = momentum * uY[i,j] - eta * gains[i,j] * dY[i,j]
+                uY[i,j] = momentum * uY[i,j] - learning_rate * gains[i,j] * dY[i,j]
                 # with momentum:
                 Y[i,j] = Y[i,j] + uY[i,j]
                 # turn off momentum for a moment:
                 #Y[i,j] = Y[i,j] - dY[i,j]
 
+        # Standardize
         Y_np -= np.mean(Y_np, 0)
 
         # Stop lying about the P-values after a while, and switch momentum
@@ -281,10 +283,6 @@ def run_tsne(X_np,
 
         if iter%50==0:
             logf("Iter %s", iter)
-            # logf("Iteration: %s, error: %s",
-            #      iter,
-            #      tsne_evaluator.error(Y, theta)
-            #      )
 
         if each_fun:
             each_fun(iter, Y_np, momentum, C_tSTE, C_tSNE)
