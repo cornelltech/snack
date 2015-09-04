@@ -140,12 +140,12 @@ def run_tsne(X_np,
              long[:,::1] triplets,
              int no_dims = 2,
              double perplexity = 30.0,
-             double theta = 0.01,
+             double theta = 0,
              double contrib_cost_triplets = 1.0,
              double contrib_cost_tsne = 1.0,
              each_fun = None,
              alpha = None,
-             int max_iters = 1000,
+             int max_iter = 1000,
              int momentum_switch_iter = 250,
              early_exaggeration = 12,
              stop_lying_iter = 250,
@@ -234,7 +234,7 @@ def run_tsne(X_np,
     # Gradient descent!!
     C_tSNE = lambda: -1
     C_tSTE = lambda: -1
-    for iter in xrange(max_iters):
+    for iter in xrange(max_iter):
         if contrib_cost_tsne:
             tsne_evaluator.calculate_gradient(Y, no_dims, dY_tSNE, theta)
             C_tSNE = lambda: tsne_evaluator.error(Y, theta)
@@ -242,10 +242,7 @@ def run_tsne(X_np,
             # so we wrap it in a thunk, just in case...
 
         if contrib_cost_triplets:
-            import time
-            begin = time.time()
             C_tSTE_val, dY_tSTE = tste_grad(Y, N, no_dims, triplets, alpha)
-            print "Triplet iter time:", time.time() - begin
             C_tSTE = lambda: C_tSTE_val
             # thunk, for symmetricity with C_tSNE
 
