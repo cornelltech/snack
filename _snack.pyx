@@ -273,7 +273,7 @@ def run_tsne(X_np,
 
         # Stop lying about the P-values after a while, and switch momentum
         if iter == stop_lying_iter:
-            tsne_evaluator.multiply_p( 1.0/12.0 )
+            tsne_evaluator.multiply_p( 1.0/early_exaggeration )
 
         if iter == momentum_switch_iter:
             momentum = final_momentum
