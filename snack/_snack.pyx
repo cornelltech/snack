@@ -1,14 +1,16 @@
 #cython: boundscheck=False, wraparound=False, cdivision=True, embedsignature=True
 
+# (C) Michael Wilber, 2013-2015, UCSD and Cornell Tech.
+# All rights reserved. Please see the 'LICENSE.txt' file for details.
+
 """SNaCK embedding: Stochastic Neighbor and Crowd Kernel embedding.
 
 Works by stapling together the t-SNE (t-distributed Stochastic Neighbor Embedding) and t-STE (t-distributed Stochastic Triplet Embedding) loss functions.
 
 Original MATLAB implementation of tSTE and tSNE: (C) Laurens van der Maaten, 2012, Delft University of Technology
 
-This version of SNaCK links against Laurens Van der Maaten's Barnes-Hut t-SNE implementation, which is in the 'libs' folder.
-
-Curator: Michael Wilber <mjw285@cornell.eu>
+This port (C) Michael Wilber, 2013-2015, UCSD and Cornell Tech.
+All rights reserved. Please see the 'LICENSE.txt' file in the source distriution for details.
 
 """
 
@@ -281,7 +283,7 @@ def snack_embed(
 
     # Warnings
     assert -1 not in triplets
-    assert triplets.max() <= N, "Some triplets refer to nonexistent points."
+    assert np.max(triplets) <= N, "Some triplets refer to nonexistent points."
     if N-1 < 3 * perplexity:
         raise ValueError("Perplexity too large for the number of data points!")
 

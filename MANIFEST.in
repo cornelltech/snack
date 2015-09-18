@@ -1,2 +1,3 @@
 include README.md
-recursive-include lib-bhtsne *.txt *.py *.m *.cpp *.h
+recursive-include lib-bhtsne *.txt *.py *.m *.cpp *.h *.pyx
+recursive-include snack *.pyx *.py

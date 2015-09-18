@@ -1,3 +1,6 @@
+# (C) Michael Wilber, 2013-2015, UCSD and Cornell Tech.
+# All rights reserved. Please see the 'LICENSE.txt' file for details.
+
 from distutils.core import setup
 from distutils.extension import Extension
 import sys
@@ -8,7 +11,7 @@ from Cython.Build import cythonize
 import numpy
 
 # Disable this if you get 'no such instruction' errors
-USE_SSE_AVX = False
+USE_SSE_AVX = True
 
 compile_args = [
         '-fopenmp',
@@ -75,11 +78,24 @@ snack_extension = Extension(
     extra_link_args = link_args,
 )
 setup(name = 'snack',
-      version = '0.1',
+      version = '0.0.2',
       packages = ['snack'],
       ext_modules = cythonize(snack_extension),
-      description="Stochastic Neighbor and Crowd Kernel (SNaCK) embeddings: Quick and dirty visualization of large-scale datasets",
+      description="Stochastic Neighbor and Crowd Kernel (SNaCK) embeddings: Quick and dirty visualization of large-scale datasets via concept embeddings",
       author='Michael Wilber',
       author_email='mwilber@mjwilber.org',
       url='http://vision.cornell.edu/se3/projects/concept-embeddings/',
+      classifiers=[
+          'Development Status :: 3 - Alpha',
+          'Intended Audience :: Science/Research',
+          'License :: OSI Approved :: BSD License',
+          'License :: OSI Approved :: zlib/libpng License',
+          'Operating System :: MacOS',
+          'Operating System :: POSIX :: Linux',
+          'Programming Language :: Cython',
+          'Programming Language :: Python :: 2.7',
+          'Topic :: Scientific/Engineering :: Visualization',
+      ],
+      keywords='snack embedding tsne visualization triplets tste',
+
 )
