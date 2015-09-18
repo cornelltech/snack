@@ -418,7 +418,7 @@ void TSNE::computeGaussianPerplexity(double* X, int N, int D, int** _row_P, int*
     vector<double> distances;
     for(int n = 0; n < N; n++) {
 
-        if(n % 10000 == 0) printf(" - point %d of %d\n", n, N);
+        if(n % 1000 == 0) printf(" - point %d of %d\n", n, N);
 
         // Find nearest neighbors
         indices.clear();
