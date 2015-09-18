@@ -1,0 +1,2 @@
+include README.md
+recursive-include lib-bhtsne *.txt *.py *.m *.cpp *.h

@@ -8,13 +8,14 @@ from Cython.Build import cythonize
 import numpy
 
 # Disable this if you get 'no such instruction' errors
-USE_SSE_AVX = True
+USE_SSE_AVX = False
 
 compile_args = [
         '-fopenmp',
         '-O3',
         '-ffast-math',
 ]
+link_args = ['-fopenmp', '-lcblas']
 include_dirs = [
     numpy.get_include(),
     "lib-bhtsne",
@@ -25,6 +26,7 @@ library_dirs = [
 if USE_SSE_AVX:
     compile_args.append("-march=native")
 
+# OSX-specific tweaks:
 if platform.system() == "Darwin":
     # To use OpenBLAS:
     #BLAS_LIB = "/usr/local/opt/openblas/include"
@@ -32,9 +34,11 @@ if platform.system() == "Darwin":
     # To use Apple's Accelerate framework for BLAS:
     BLAS_INCLUDE = "/System/Library/Frameworks/Accelerate.framework/Frameworks/vecLib.framework/Headers"
     BLAS_LIB = "/System/Library/Frameworks/Accelerate.framework/Frameworks/vecLib.framework"
+    # adjust this for your gcc version:
     GCC_VERSION = "/usr/local/bin/gcc-5"
     print "On OSX, ensure you have the following dependencies:"
     print "- You must use a gcc version from homebrew that supports openmp"
+    # (not necessary if you link with Accelerate)
     #print "- You must install OpenBLAS from homebrew"
     #if not os.path.exists(BLAS_INCLUDE+"/cblas.h"):
     #    print "Please install OpenBLAS with:"
@@ -59,8 +63,8 @@ if platform.system() == "Darwin":
         # GNU assembler does not, for some reason.
 
 snack_extension = Extension(
-    '_snack', [
-        "_snack.pyx",
+    'snack._snack', [
+        "snack/_snack.pyx",
         "lib-bhtsne/tsne.cpp",
         "lib-bhtsne/sptree.cpp",
     ],
@@ -68,9 +72,14 @@ snack_extension = Extension(
     library_dirs = library_dirs,
     language="c++",
     extra_compile_args = compile_args,
-    extra_link_args = ['-fopenmp', '-lcblas'],
+    extra_link_args = link_args,
 )
-setup(name='snack',
+setup(name = 'snack',
+      version = '0.1',
+      packages = ['snack'],
       ext_modules = cythonize(snack_extension),
-      description="SNaCK embedding: Stochastic Neighbor and Crowd Kernel",
+      description="Stochastic Neighbor and Crowd Kernel (SNaCK) embeddings: Quick and dirty visualization of large-scale datasets",
+      author='Michael Wilber',
+      author_email='mwilber@mjwilber.org',
+      url='http://vision.cornell.edu/se3/projects/concept-embeddings/',
 )

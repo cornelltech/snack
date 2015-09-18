@@ -1,4 +1,4 @@
-#cython: boundscheck=False, wraparound=False, cdivision=True
+#cython: boundscheck=False, wraparound=False, cdivision=True, embedsignature=True
 
 """SNaCK embedding: Stochastic Neighbor and Crowd Kernel embedding.
 
@@ -6,8 +6,7 @@ Works by stapling together the t-SNE (t-distributed Stochastic Neighbor Embeddin
 
 Original MATLAB implementation of tSTE and tSNE: (C) Laurens van der Maaten, 2012, Delft University of Technology
 
-Also uses implementation of t_SNE from scikit-learn. (C) Alexander
-Fabisch -- <afabisch@informatik.uni-bremen.de>
+This version of SNaCK links against Laurens Van der Maaten's Barnes-Hut t-SNE implementation, which is in the 'libs' folder.
 
 Curator: Michael Wilber <mjw285@cornell.eu>
 
@@ -26,7 +25,7 @@ from libc cimport math
 from libc.stdlib cimport malloc, free
 
 # External wrappers for Barnes Hut t-SNE:
-cdef extern from "lib-bhtsne/tsne.h":
+cdef extern from "tsne.h":
     cdef cppclass TSNE:
         void run(double* X, int N, int D, double* Y, int no_dims, double perplexity, double theta);
         void computeGradient(double* P, int* inp_row_P, int* inp_col_P, double* inp_val_P, double* Y, int N, int D, double* dC, double theta);
@@ -39,14 +38,10 @@ cdef extern from "lib-bhtsne/tsne.h":
         void symmetrizeMatrix(int** _row_P, int** _col_P, double** _val_P, int N)
         void zeroMean(double* X, int N, int D)
 
-def run_tsne_from_laurens(double [:, ::1] X, int no_dims, double perplexity, double theta = 0.01):
-    cdef TSNE t
-    Ynp = np.zeros((len(X), no_dims), dtype='double')
-    cdef double [:, ::1] Y = Ynp
-    t.run(&(X[0,0]), X.shape[0], X.shape[1], &(Y[0,0]), no_dims, perplexity, theta)
-    return Ynp
-
 cdef class Inexact_BHTSNE(object):
+    """Call the inexact version of t-SNE, which approximates the gradient
+    by using a tree
+    """
     cdef TSNE tsne
     cdef int *row_P
     cdef int *col_P
@@ -99,6 +94,9 @@ cdef class Inexact_BHTSNE(object):
         self.val_P = NULL
 
 cdef class Exact_BHTSNE(object):
+    """Exact version of Barnes-Hut t-SNE. Warning: takes O(N^2) memory
+    and time, where N is the number of points.
+    """
     cdef TSNE tsne
     cdef object P_np
 
@@ -136,49 +134,115 @@ cdef class Exact_BHTSNE(object):
         cdef double[:,::1] P = self.P_np
         return self.tsne.evaluateError(&P[0,0], &Y[0,0], Y.shape[0], Y.shape[1])
 
-def run_tsne(X_np,
-             long[:,::1] triplets,
-             int no_dims = 2,
-             double perplexity = 30.0,
-             double theta = 0,
-             double contrib_cost_triplets = 1.0,
-             double contrib_cost_tsne = 1.0,
-             each_fun = None,
-             alpha = None,
-             int max_iter = 1000,
-             int momentum_switch_iter = 250,
-             early_exaggeration = 12,
-             stop_lying_iter = 250,
-             double momentum = 0.5,
-             double final_momentum = 0.8,
-             double learning_rate = 1.0,
-             initial_Y = None,
-             verbose = True,
-             num_threads = None,
+def snack_embed(
+        # Important:
+        double[:, ::1] X_np,
+        double contrib_cost_tsne,
+        long[:,::1] triplets,
+        double contrib_cost_triplets,
+        double perplexity = 30.0,
+        double theta = 0,
+
+        # Fine-grained optimization control:
+        int no_dims = 2,
+        alpha = None,
+        int max_iter = 300,     # BH-tSNE default: 1000
+        early_exaggeration = 4, # BH-tSNE default: 12
+        early_exaggeration_switch_iter = 100,  # BH-tSNE default: 250 (see max_iter!)
+        double momentum = 0.5,
+        int momentum_switch_iter = 250,
+        double final_momentum = 0.8,
+        double learning_rate = 1.0,
+        initial_Y = None,
+
+        # Other:
+        each_fun = None,
+        verbose = True,
+        num_threads = None,
 ):
     """Learn the triplet embedding for the given triplets.
 
-    Returns an array with shape (max(triplets)+1, no_dims). The i-th
+    Returns an array with shape (len(X_np), no_dims). The i-th
     row in this array corresponds to the no_dims-dimensional
     coordinate of the point.
 
-    Parameters:
+    Important parameters
+    --------------------
 
-    triplets: An Nx3 integer array of object indices. Each row is a
-              triplet; first column is the 'reference', second column
-              is the 'near edge', and third column is the 'far edge'.
-              (MUST BE 0-indexed!!)
-    distances: A square distance matrix for t-SNE.
-    no_dims:  Number of dimensions in final embedding. High-dimensional
-              embeddings are much easier to satisfy (lower training
-              error), but may capture less information.
-    alpha:    Degrees of freedom in student T kernel. Default is no_dims-1.
-              Considered "black magic"; roughly, how much of an impact
-              badly satisfying points have on the gradient calculation.
-    verbose:  Prints log messages every 10 iterations
-    initial_X: The initial set of points to use. Normally distributed if unset.
-    num_threads: Parallelism.
-    each_function: A function that is called for each gradient update
+    X_np : numpy array with shape (N, D) and type double
+        The feature representation of N points in D dimensions.
+    contrib_cost_tsne : double
+        Trade-off: raises the influence of t-SNE in the final
+        embedding. Typical ranges are between 100 and 5000.
+        Suggestion: Pick contrib_cost_tsne and contrib_cost_triplets
+        such that the norms of the corresponding gradients are roughly
+        equal.
+    triplets : numpy array with shape (T, 3) and type long.
+        Each row is (a,b,c), which indicates that in the desired
+        embedding Y, then object a should be closer to b than a is to
+        C, or |Y[a]-Y[b]| < |Y[a]-Y[c]|.
+    contrib_cost_triplets: double
+        Trade-off: raises the influence of triplets in the final
+        embedding. Typical ranges are between 0.1 and 5 Suggestion:
+        Pick contrib_cost_tsne and contrib_cost_triplets such that the
+        norms of the corresponding gradients are roughly equal.
+    perplexity : double
+        t-SNE perplexity parameter, controlling the number of expected
+        neighbors for each point. Generally between 10 and 300.
+    theta : double
+        Optimization parameter: set to 0.0 for an exact solution.
+        Higher values are faster and sloppier. Sets of points whose
+        width is smaller than this angle will be collapsed. Try
+        starting with theta=0.5 and adjust as needed.
+
+    Optimization parameters
+    -----------------------
+
+    no_dims : int
+        Number of dimensions of the final embedding. High-dimensional
+        embeddings are much easier to satisfy (lower training error),
+        but may capture less information. (UNTESTED for >2 dimensions)
+    alpha : int
+        Degrees of freedom in student T kernel for t-STE. Default is
+        no_dims-1. Considered "black magic"; roughly, how much of an
+        impact badly satisfying points have on the gradient
+        calculation.
+    max_iter : int
+        Number of iterations to convergence. 300 or 500 is usually enough.
+    early_exaggeration : double
+        Magic t-SNE parameter. (see paper)
+    early_exaggeration_switch_iter : int
+        Which iteration to stop using early exaggeration.
+    momentum : double
+        Magic optimization.
+    final_momentum : double
+    momentum_switch_iter : int
+        After momentum_switch_iter iterations, switch momentum to the
+        value of final_momentum.
+    learning_rate : double
+        All gradients are multiplied by this value.
+    initial_y : numpy array with shape (N, no_dims) and type double.
+        Matrix with shape (N, no_dims). If not specified, the
+        embedding will be calculated completely randomly. If
+        unspecified, embedding will be created randomly.
+
+    Other parameters
+    ----------------
+
+    each_fun : function
+        Callback called on each iteration. Accepts parameters:
+        (iteration number, current_Y, C_tSTE, C_tSNE, dY_tSTE,
+        dY_tSNE) Note current_Y is modified each iteration. C_tSTE()
+        and C_tSNE() are thunks that calculate tSTE and tSNE error
+        when called. (This may be expensive!) dY_tSTE and dY_tSNE are
+        the gradients of tSTE and tSNE.
+    verbose : boolean
+        Whether to log debug information. Note that BH-tSNE also does
+        its own logging to stderr from C++.
+    num_threads : int
+        Number of threads to use for OpenMP (but this doesn't really
+        matter much anymore; only the t-STE calculation is
+        parallelized)
 
     """
     def logf(s, *args):
@@ -188,7 +252,6 @@ def run_tsne(X_np,
     if num_threads is None:
         num_threads = openmp.omp_get_num_procs()
     openmp.omp_set_num_threads(num_threads)
-
 
     # Set up variables
     cdef int N = X_np.shape[0], D = X_np.shape[1]
@@ -218,6 +281,7 @@ def run_tsne(X_np,
 
     # Warnings
     assert -1 not in triplets
+    assert triplets.max() <= N, "Some triplets refer to nonexistent points."
     if N-1 < 3 * perplexity:
         raise ValueError("Perplexity too large for the number of data points!")
 
@@ -272,7 +336,7 @@ def run_tsne(X_np,
         Y_np -= np.mean(Y_np, 0)
 
         # Stop lying about the P-values after a while, and switch momentum
-        if iter == stop_lying_iter:
+        if iter == early_exaggeration_switch_iter:
             tsne_evaluator.multiply_p( 1.0/early_exaggeration )
 
         if iter == momentum_switch_iter:
@@ -282,7 +346,7 @@ def run_tsne(X_np,
             logf("Iter %s", iter)
 
         if each_fun:
-            each_fun(iter, Y_np, momentum, C_tSTE, C_tSNE)
+            each_fun(iter, Y_np, C_tSTE, C_tSNE, dY_tSTE, dY_tSNE)
 
     tsne_evaluator.destroy()
     return Y_np
@@ -328,7 +392,7 @@ cpdef tste_grad(npX,
     cdef double[:, :, ::1] dC_part = np.zeros((no_triplets, no_dims, 3), 'float64')
 
     # We don't perform L2 regularization, unlike original tSTE
-    # (wait, we should do this if we use momentum!)
+    # (...but perhaps we should do this if we use momentum!)
 
     # # L2 Regularization cost
     # cdef double lamb = 1.0 # (No regularization!)
