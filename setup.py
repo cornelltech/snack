@@ -18,7 +18,8 @@ compile_args = [
         '-O3',
         '-ffast-math',
 ]
-link_args = ['-fopenmp', '-lcblas']
+link_args = ['-fopenmp']
+blas_library_name = "-lblas" # added to link_args at the end
 include_dirs = [
     numpy.get_include(),
     "lib-bhtsne",
@@ -31,6 +32,11 @@ if USE_SSE_AVX:
 
 # OSX-specific tweaks:
 if platform.system() == "Darwin":
+    # On OSX, ensure you have the following dependencies:
+    # - You must use a gcc version from homebrew that supports openmp
+    # - You must install OpenBLAS from homebrew
+    #   (not necessary if you link with Accelerate)
+
     # To use OpenBLAS:
     #BLAS_LIB = "/usr/local/opt/openblas/include"
     #BLAS_LIB = "/usr/local/opt/openblas/lib"
@@ -39,15 +45,6 @@ if platform.system() == "Darwin":
     BLAS_LIB = "/System/Library/Frameworks/Accelerate.framework/Frameworks/vecLib.framework"
     # adjust this for your gcc version:
     GCC_VERSION = "/usr/local/bin/gcc-5"
-    print "On OSX, ensure you have the following dependencies:"
-    print "- You must use a gcc version from homebrew that supports openmp"
-    # (not necessary if you link with Accelerate)
-    #print "- You must install OpenBLAS from homebrew"
-    #if not os.path.exists(BLAS_INCLUDE+"/cblas.h"):
-    #    print "Please install OpenBLAS with:"
-    #    print "    $ brew install openblas"
-    #    print "or edit setup.py."
-    #    sys.exit(1)
     if not os.path.exists(GCC_VERSION):
         print "Please install GCC from homebrew wth:"
         print "    $ brew install gcc"
@@ -65,6 +62,13 @@ if platform.system() == "Darwin":
         # The clang assembler knows about AVX instructions.
         # GNU assembler does not, for some reason.
 
+
+# Inside Conda, we should link against Conda-provided OpenBLAS.
+if platform.system() == "Linux" and 'CONDA_BUILD' in os.environ:
+    include_dirs.append(os.environ["PREFIX"]+"/include")
+    library_dirs.append(os.environ["PREFIX"]+"/include")
+    blas_library_name = "-lopenblas"
+
 snack_extension = Extension(
     'snack._snack', [
         "snack/_snack.pyx",
@@ -75,10 +79,10 @@ snack_extension = Extension(
     library_dirs = library_dirs,
     language="c++",
     extra_compile_args = compile_args,
-    extra_link_args = link_args,
+    extra_link_args = link_args + [blas_library_name],
 )
 setup(name = 'snack',
-      version = '0.0.2',
+      version = '0.0.3',
       packages = ['snack'],
       ext_modules = cythonize(snack_extension),
       description="Stochastic Neighbor and Crowd Kernel (SNaCK) embeddings: Quick and dirty visualization of large-scale datasets via concept embeddings",
