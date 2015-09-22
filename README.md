@@ -2,30 +2,33 @@ Stochastic Neighbor and Crowd Kernel (SNaCK) embedding
 ======================================================
 Quick and dirty visualization of large-scale datasets via concept embeddings
 
-
 Installation
 ============
 The following platforms are supported:
-- Python 2.7 on Linux, using binary packages on Conda
-- Python 2.7 on Linux, using Pip
-- Python 2.7 on OSX, using binary packages on Conda
-- Python 2.7 on OSX, using Conda and GCC from Homebrew
+- Python 2.7 on Linux, x64
+   - Binary packages available on Conda
+   - Source packages available from Pip
+- Python 2.7 on OSX
+   - Binary packages for Yosemite available on Conda
+   - Source packages available from Pip (Homebrew-GCC required)
 
-Linux, Mac OS X: Install from Conda
-------------------------------
-TODO.
-
-Linux: Install from Pip
------------------------
+Linux and Mac OS X: Install from Conda
+--------------------------------------
 Just run:
+    $ conda install -c https://conda.anaconda.org/gcr snack
 
+
+Linux: Install from source with Pip
+-----------------------------------
+Just run:
     $ pip install snack
 
 You need to install Python 2.7, Numpy, and Cython. You also need a
 working compiler, CBLAS, and the Python development headers, which are
 installable from your distribution's package manager.
 
-To install SNaCK on a clean Ubuntu Trusty x64 system, run:
+To install SNaCK and its dependencies on a clean Ubuntu Trusty x64
+system, run:
 
     # sudo aptitude install \
       build-essential       \
@@ -38,8 +41,8 @@ To install SNaCK on a clean Ubuntu Trusty x64 system, run:
     $ pip install cython
     $ pip install snack
 
-OS X: Install from Pip and Homebrew
-----------------------------------
+OS X: Install from source with Pip and Homebrew
+-----------------------------------------------
 If you are on Mac OS X, you must install the real "not-clang" version
 of gcc because it has OpenMP support. At the time of writing, clang
 does not support OpenMP, and Apple has unhelpfully symlinked clang to
@@ -63,23 +66,18 @@ The recommended installation method on OS X is with Homebrew:
 You may need to edit `setup.py` and change `GCC_VERSION` to point to
 the correct version, if you are not using `/usr/local/bin/gcc-5`.
 
-
-Just build without installing
------------------------------
-
-To simply build Snack without installing it, run:
-
-    $ python setup.py build_ext --inplace
-
-This builds `snack/_snack.so`. You can move the `snack` folder to your
-project's directory and then `import snack`. This should work as long
-as the `snack` folder is inside your current directory.
-
 How to use
-----------
+==========
+
+TODO
+For now, test with
+
+    import snack
+    import numpy as np
+    snack.snack_embed(np.random.randn(500, 5), 1000.0, np.random.randint(500, size=(5000, 3)), 1.0)
 
 Examples
---------
+========
 
 See also
---------
+========

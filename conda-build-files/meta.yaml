@@ -1,6 +1,6 @@
 package:
   name: snack
-  version: "0.0.2"
+  version: "0.0.3"
 
 source:
   path: ".."
@@ -18,12 +18,14 @@ requirements:
     - setuptools
     - numpy
     - cython
-    - openblas
+    - openblas # [not osx]
+    - gcc # [osx]
 
   run:
     - python
     - numpy
-    - openblas
+    - openblas # [not osx]
+    - gcc # [osx]
 
 about:
   home: http://vision.cornell.edu/se3/projects/concept-embeddings/
