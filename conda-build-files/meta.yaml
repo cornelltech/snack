@@ -30,6 +30,7 @@ requirements:
 about:
   home: http://vision.cornell.edu/se3/projects/concept-embeddings/
   license: BSD 4-clause License
+  license_file: README.md
   summary: "Quick and dirty visualization of large-scale datasets via concept embeddings"
 
 # See

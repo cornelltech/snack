@@ -2,6 +2,8 @@ Stochastic Neighbor and Crowd Kernel (SNaCK) embedding
 ======================================================
 Quick and dirty visualization of large-scale datasets via concept embeddings
 
+See
+
 Installation
 ============
 The following platforms are supported:
@@ -16,7 +18,6 @@ Linux and Mac OS X: Install from Conda
 --------------------------------------
 Just run:
     $ conda install -c https://conda.anaconda.org/gcr snack
-
 
 Linux: Install from source with Pip
 -----------------------------------
@@ -65,19 +66,3 @@ The recommended installation method on OS X is with Homebrew:
 
 You may need to edit `setup.py` and change `GCC_VERSION` to point to
 the correct version, if you are not using `/usr/local/bin/gcc-5`.
-
-How to use
-==========
-
-TODO
-For now, test with
-
-    import snack
-    import numpy as np
-    snack.snack_embed(np.random.randn(500, 5), 1000.0, np.random.randint(500, size=(5000, 3)), 1.0)
-
-Examples
-========
-
-See also
-========
