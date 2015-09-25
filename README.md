@@ -14,10 +14,14 @@ The following platforms are supported:
    - Binary packages for Yosemite available on Conda
    - Source packages available from Pip (Homebrew-GCC required)
 
-Linux and Mac OS X: Install from Conda
---------------------------------------
+Linux and Mac OS X: Install from Conda (Preferred)
+--------------------------------------------------
+Please use Conda. Your life will be easier.
+
 Just run:
     $ conda install -c https://conda.anaconda.org/gcr snack
+
+If you insist on compiling from source, read on:
 
 Linux: Install from source with Pip
 -----------------------------------
@@ -44,10 +48,12 @@ system, run:
 
 OS X: Install from source with Pip and Homebrew
 -----------------------------------------------
+SNaCK uses OpenMP. This makes compilation tricky on Mac OS X.
+
 If you are on Mac OS X, you must install the real "not-clang" version
 of gcc because it has OpenMP support. At the time of writing, clang
 does not support OpenMP, and Apple has unhelpfully symlinked clang to
-`/usr/bin/gcc`. This is not sufficient.
+`/usr/bin/gcc`. This will not work.
 
 Using Apple-provided GCC is NOT supported. If `gcc-5 --version`
 contains the string `clang` anywhere in its output, you do not have
@@ -55,7 +61,8 @@ the correct version of gcc.
 
 Using Apple-provided Python is NOT supported.
 
-The recommended installation method on OS X is with Homebrew:
+The recommended installation method on OS X is with Homebrew. The
+following has been tested on a clean Yosemite installation.
 
     $ brew install gcc
     $ brew install python
@@ -65,4 +72,4 @@ The recommended installation method on OS X is with Homebrew:
     $ pip install snack
 
 You may need to edit `setup.py` and change `GCC_VERSION` to point to
-the correct version, if you are not using `/usr/local/bin/gcc-5`.
+the correct version if you are not using `/usr/local/bin/gcc-5`.
