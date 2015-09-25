@@ -19,6 +19,7 @@ Linux and Mac OS X: Install from Conda (Preferred)
 Please use Conda. Your life will be easier.
 
 Just run:
+
     $ conda install -c https://conda.anaconda.org/gcr snack
 
 If you insist on compiling from source, read on:
@@ -26,6 +27,7 @@ If you insist on compiling from source, read on:
 Linux: Install from source with Pip
 -----------------------------------
 Just run:
+
     $ pip install snack
 
 You need to install Python 2.7, Numpy, and Cython. You also need a
