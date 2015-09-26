@@ -1,0 +1,83 @@
+How to make a release of SNaCK
+
+* Package in Pip
+See
+https://hynek.me/articles/sharing-your-labor-of-love-pypi-quick-and-dirty/
+for a great tutorial.
+** DONE Set Metadata (version numbers, etc)
+** DONE Test on OSX
+conda uninstall snack
+pip uninstall snack
+rm -r build snack/_snack.so
+pip install .
+
+** DONE Test on Linux
+* DONE Upload to PyPI
+See helpful instructions! https://packaging.python.org/en/latest/distributing/#setup-py
+- Made a PyPI account, mjw25
+- python setup.py register
+
+To upload a source package:
+- python setup.py sdist
+- twine upload dist/*
+
+** What about distributing binary wheels?
+This is difficult.
+- I have to switch from 'distutils' to 'setuptools'
+- When I do this, setuptools by default installs everything as a
+  single .egg file, which is a zip file. It puts this in
+  /usr/local/lib/python2.7/site-packages. Ugh.
+
+** TODO Make a test script
+import snack
+import numpy as np
+snack.snack_embed(np.random.randn(500, 5), 1000.0,
+                  np.random.randint(500, size=(5000, 3)), 1.0)
+** DONE Need a README
+
+* DONE Package in Conda
+*** How to use Conda
+On a fresh machine, install Conda:
+: wget https://repo.continuum.io/miniconda/Miniconda-latest-Linux-x86_64.sh
+: bash Miniconda-latest-Linux-x86_64.sh
+: . .bashrc
+
+Install anaconda-client:
+: conda install anaconda-client
+
+Install git and build-essential
+
+Edit meta.yml to bump version number and deps:
+: vi conda-build-files/meta.yml
+
+Make SURE that build files are GONE, this will mess up your anaconda
+package!
+: rm -r build snack/*.so snack/*.cpp
+
+Build in Conda:
+: conda build conda-build-files/
+
+Output:
+: # If you want to upload this package to anaconda.org later, type:
+: #
+: # $ anaconda upload /Users/michael/local/miniconda/conda-bld/osx-64/snack-0.0.2-nppy27_0.tar.bz2
+: #
+: # To have conda build upload to anaconda.org automatically, use
+: # $ conda config --set anaconda_upload yes
+
+This saves the build file in a local repository in ~miniconda/conda-bld.
+
+To install locally:
+: conda build --use_local snack
+
+To upload with Anaconda:
+: anaconda upload /Users/michael/local/miniconda/conda-bld/osx-64/snack-0.0.2-nppy27_0.tar.bz2
+
+To install from Anaconda (test on a fresh machine)
+: conda install -c https://conda.anaconda.org/gcr snack
+
+
+*** DONE Adjust metadata (version numbers, etc)
+*** DONE Build on linux
+*** DONE Build on OSX
+** TODO Write some examples.
