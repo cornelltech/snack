@@ -2,7 +2,11 @@ Stochastic Neighbor and Crowd Kernel (SNaCK) embedding
 ======================================================
 Quick and dirty visualization of large-scale datasets via concept embeddings
 
+Usage
+=====
 See
+http://nbviewer.ipython.org/github/cornelltech/snack/blob/master/Examples.ipynb
+for documentation on SNaCK's parameters and example usage.
 
 Installation
 ============
