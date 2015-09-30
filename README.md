@@ -1,6 +1,20 @@
+![demo](snack-logo.jpg)
 Stochastic Neighbor and Crowd Kernel (SNaCK) embedding
 ======================================================
 Quick and dirty visualization of large-scale datasets via concept embeddings
+
+This code (and the [companion paper](http://vision.cornell.edu/se3/projects/concept-embeddings/)) showcase our work on “SNaCK,” a low-dimensional concept embedding algorithm that combines human expertise with automatic machine similarity kernels. Both parts are complimentary: human insight can capture relationships that are not apparent from the object’s visual similarity and the machine can help relieve the human from having to exhaustively specify many constraints.
+
+As input, our SNaCK algorithm takes two sources:
+
+- **Several "relative similarity comparisons."** Each constraint has
+the form (a,b,c), meaning that in the lower-dimension embedding Y,
+Y[a] should be closer to Y[b] than it is to Y[c]. Experts can generate
+many of these constraints using
+[crowdsourcing](http://vision.cornell.edu/se3/projects/cost-effective-hits/).
+- **Feature vector representations of each point.** For instance, such features could come from HOG, SIFT, a deep-learned CNN, word embeddings, or some other representation.
+
+SNaCK then generates an embedding that satisfies both classes of constraints.
 
 Usage
 =====
