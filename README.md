@@ -24,9 +24,11 @@ See
 http://nbviewer.ipython.org/github/cornelltech/snack/blob/master/Examples.ipynb
 for documentation on SNaCK's parameters and example usage.
 
-Try SNaCK out in your web browser!
-==================================
-[Launch an IPython Notebook with SNaCK in your web browser!](http://mybinder.org/repo/cornelltech/snack-zeroinstall) This environment has a copy of SNaCK and comes pre-loaded with a copy of the [Food-10k dataset](http://vision.cornell.edu/se3/projects/concept-embeddings/) for you to explore.
+Launch a notebook with SNaCK and Food-10k
+=========================================
+[![Binder](http://mybinder.org/badge.svg)](http://mybinder.org/repo/cornelltech/snack-zeroinstall)
+
+Click the above button to launch an IPython Notebook with SNaCK. This environment has a copy of SNaCK and comes pre-loaded with a copy of the [Food-10k dataset](http://vision.cornell.edu/se3/projects/concept-embeddings/) for you to explore.
 
 This service is made possible by the folks at [binder](http://mybinder.org/)
 
