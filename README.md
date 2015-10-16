@@ -28,9 +28,6 @@ Try SNaCK out in your web browser!
 ==================================
 [Launch an IPython Notebook with SNaCK in your web browser!](http://mybinder.org/repo/cornelltech/snack-zeroinstall) This environment has a copy of SNaCK and comes pre-loaded with a copy of the [Food-10k dataset](http://vision.cornell.edu/se3/projects/concept-embeddings/) for you to explore.
 
-*Caveat*: The second cell will fail to execute the first time it is run. This is
-normal; simply run it again.
-
 This service is made possible by the folks at [binder](http://mybinder.org/)
 
 Installation
