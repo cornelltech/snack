@@ -1,6 +1,8 @@
 ![demo](snack-logo.jpg)
 Stochastic Neighbor and Crowd Kernel (SNaCK) embedding
 ======================================================
+[![Binder](http://mybinder.org/badge.svg)](http://mybinder.org/repo/cornelltech/snack-zeroinstall)
+
 Quick and dirty visualization of large-scale datasets via concept embeddings
 
 This code (and the [companion paper](http://vision.cornell.edu/se3/projects/concept-embeddings/)) showcase our work on “SNaCK,” a low-dimensional concept embedding algorithm that combines human expertise with automatic machine similarity kernels. Both parts are complimentary: human insight can capture relationships that are not apparent from the object’s visual similarity and the machine can help relieve the human from having to exhaustively specify many constraints.
@@ -21,6 +23,16 @@ Usage
 See
 http://nbviewer.ipython.org/github/cornelltech/snack/blob/master/Examples.ipynb
 for documentation on SNaCK's parameters and example usage.
+
+Try SNaCK out in your web browser!
+==================================
+[Launch an IPython Notebook with SNaCK in your web browser!](http://mybinder.org/repo/cornelltech/snack-zeroinstall) This environment has a copy of SNaCK and comes pre-loaded with a copy of the [Food-10k dataset](http://vision.cornell.edu/se3/projects/concept-embeddings/) for you to explore.
+
+*Caveat*: Run the first cell containing the `conda` command and *wait for it to
+complete* before running anything else! If you get an error, restart the running
+Kernel and try again.
+
+This service is made possible by the folks at [binder](http://mybinder.org/)
 
 Installation
 ============
