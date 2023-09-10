@@ -43,17 +43,17 @@ if platform.system() == "Darwin":
     # Find the right GCC to use
     if 'CONDA_BUILD' in os.environ:
         GCC_VERSION = os.environ["PREFIX"] + "/bin/gcc"
-        print GCC_VERSION
+        print(GCC_VERSION)
     else:
         # If you are NOT in a Conda environment, you MUST ensure that
         # you have the proper gcc version!
         GCC_VERSION = "/usr/local/bin/gcc-5"
         # Use a gcc from Homebrew !!
     if not os.path.exists(GCC_VERSION):
-        print "Please install GCC from homebrew wth:"
-        print "    $ brew install gcc"
-        print "Note that on OSX, /usr/bin/gcc is a link to CLang by default,"
-        print "which will not work. "
+        print("Please install GCC from homebrew wth:")
+        print("    $ brew install gcc")
+        print("Note that on OSX, /usr/bin/gcc is a link to CLang by default,")
+        print("which will not work. ")
         sys.exit(1)
     os.environ["CC"] = GCC_VERSION
     os.environ["CXX"] = GCC_VERSION
